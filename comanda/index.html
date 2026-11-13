@@ -338,7 +338,8 @@ function subscribe(){
   watchDoc("config/geral",d=>{if(d&&d.mesas)CONFIG.mesas=Math.max(1,Math.min(60,d.mesas|0));refresh()});
   watch("contas",(docs,meta)=>{CONTAS={};docs.forEach(d=>{CONTAS[d.mesa]=d});ok("c",meta);refresh()});
   watch("tickets",(docs,meta)=>{TICKETS=docs.sort((a,b)=>a.criado-b.criado);ok("t",meta);alerts(meta);refresh()});
-  watch("fechamentos",docs=>{FECH=docs.sort((a,b)=>b.fechadoEm-a.fechadoEm);refresh()},["dia",today()]);
+  watchDoc("config/dono",(d,meta)=>{OWNER=d;if(!meta||!meta.fromCache)OWNER_OK=true});
+  if(isCaixaRole(ROLE)&&KEY)startFech();
 }
 function alerts(meta){
   const mine=TICKETS.filter(t=>t.setor===ROLE||((ROLE==="caixa"||ROLE==="atend")&&t.setor==="bebidas"));
@@ -360,6 +361,7 @@ function render(){
   if(S.mode==="fb"&&!CODE){$("roleBtn").hidden=true;return renderCode()}
   if(!ROLE)return renderRoles();
   if(ROLE==="garcom")return VIEW==="mesas"?renderMesas():renderMesa();
+  if(isCaixaRole(ROLE)&&!KEY)return renderLocked();
   if(ROLE==="atend")return renderAtend();
   if(ROLE==="caixa")return renderCaixa();
   renderSetor(ROLE);
@@ -375,6 +377,52 @@ function refresh(){
   renderSetor(ROLE);
 }
 let PENDING=false;
+/* ================= senha do dono =================
+   O caixa do dia fica guardado num endereço secreto (a "chave do caixa").
+   A chave só abre com a senha do dono; garçom, churrasqueira e cozinha não chegam nela. */
+let OWNER=null,OWNER_OK=false;
+let KEY=ls("gbc_k")||"";
+let UNLOCK=null;            // chave aberta agora há pouco, para trocar de função sem pedir a senha duas vezes
+let FECH_UN=null;
+const isCaixaRole=r=>r==="caixa"||r==="atend";
+function startFech(){if(FECH_UN||!KEY)return;FECH_UN=watch("cx_"+KEY,docs=>{FECH=docs.sort((a,b)=>b.fechadoEm-a.fechadoEm);refresh()},["dia",today()])}
+function stopFech(){if(FECH_UN)FECH_UN();FECH_UN=null;FECH=[]}
+function setKey(k){KEY=k||"";ls("gbc_k",KEY||null);if(KEY)startFech();else stopFech()}
+const b64=u=>btoa(String.fromCharCode(...new Uint8Array(u)));
+const ub64=t=>Uint8Array.from(atob(t),c=>c.charCodeAt(0));
+async function pinKey(pin,salt,iter){const base=await crypto.subtle.importKey("raw",new TextEncoder().encode(pin),"PBKDF2",false,["deriveKey"]);return crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:iter,hash:"SHA-256"},base,{name:"AES-GCM",length:256},false,["encrypt","decrypt"])}
+async function openKey(pin){if(!OWNER)return null;try{const k=await pinKey(pin,ub64(OWNER.salt),OWNER.iter);return new TextDecoder().decode(await crypto.subtle.decrypt({name:"AES-GCM",iv:ub64(OWNER.iv)},k,ub64(OWNER.ct)))}catch(e){return null}}
+async function sealKey(pin,K){const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12)),iter=150000;const k=await pinKey(pin,salt,iter);return{salt:b64(salt),iv:b64(iv),ct:b64(await crypto.subtle.encrypt({name:"AES-GCM",iv},k,new TextEncoder().encode(K))),iter,atualizado:Date.now()}}
+let PINRES=null;
+// mode: "check" pede a senha atual (ou cria, se ainda não existe); "new" cria uma senha nova para a chave atual
+function pinSheet(title,msg,mode){
+  if(!crypto||!crypto.subtle){toast("Este navegador não abre a área do dono. Use o Chrome atualizado.",true);return Promise.resolve(null)}
+  if(!OWNER_OK&&mode!=="new"){toast("Conectando com a comanda… tente de novo em alguns segundos.",true);return Promise.resolve(null)}
+  const create=mode==="new"||!OWNER;
+  return new Promise(res=>{
+    if(PINRES)PINRES(null);PINRES=res;
+    sheet(`<button class="x" type="button" data-close aria-label="Fechar">×</button><h3>${esc(title)}</h3>
+    <p class="note" style="margin:0">${create&&mode!=="new"?"Ainda não existe senha do dono. Crie agora uma senha de 4 a 8 números: só quem souber ela abre o caixa, vê quanto entrou e troca a função dos celulares.":esc(msg)}</p>
+    <form id="pinForm" novalidate><div class="fld"><span>${create?"Nova senha do dono":"Senha do dono"}</span><input type="password" inputmode="numeric" id="pin1" maxlength="8" autocomplete="off"></div>
+    ${create?'<div class="fld"><span>Repita a senha</span><input type="password" inputmode="numeric" id="pin2" maxlength="8" autocomplete="off"></div>':""}
+    <p class="note" id="pinErr" style="color:var(--bad);margin:8px 0 0" hidden></p>
+    <button class="btn pri wide" type="submit" id="pinOk" style="margin-top:14px">${create?"Criar senha":"Entrar"}</button></form>`);
+    setTimeout(()=>{const i=$("pin1");if(i)i.focus()},50);
+    const err=m=>{const e=$("pinErr");e.textContent=m;e.hidden=false};
+    $("pinForm").oninput=()=>{$("pinErr").hidden=true};
+    $("pinForm").onsubmit=async e=>{e.preventDefault();const p1=$("pin1").value.trim();
+      if(!/^\d{4,8}$/.test(p1))return err("A senha tem de 4 a 8 números.");
+      const b=$("pinOk");b.disabled=true;b.textContent="Conferindo…";
+      let K=null;
+      if(create){if($("pin2").value.trim()!==p1){b.disabled=false;b.textContent="Criar senha";return err("As duas senhas não estão iguais.")}
+        K=mode==="new"&&KEY?KEY:Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,"0")).join("");
+        const sealed=await sealKey(p1,K);OWNER=sealed;try{await put("config/dono",sealed)}catch(er){writeErr(er);b.disabled=false;b.textContent="Criar senha";return}
+        toast(mode==="new"?"Senha do dono trocada":"Senha do dono criada. Guarde bem!")}
+      else{K=await openKey(p1);if(!K){b.disabled=false;b.textContent="Entrar";$("pin1").value="";return err("Senha errada.")}}
+      const r=PINRES;PINRES=null;closeSheet();r&&r(K)};
+  });
+}
+async function trocarSenha(){const k=await pinSheet("Trocar senha do dono","Digite a senha atual.","check");if(!k)return;setKey(k);await pinSheet("Nova senha do dono","","new")}
 document.addEventListener("focusout",()=>{if(PENDING){PENDING=false;setTimeout(refresh,50)}});
 
 function modeBanner(){
@@ -395,10 +443,13 @@ function renderFail(){
   $("app").innerHTML=S.why==="offline"?`<div class="empty" style="margin-top:24px"><b>Sem internet</b>Na primeira vez a comanda precisa de internet para abrir. Conecte o celular e toque em Tentar de novo.<br><br><button class="btn pri" type="button" data-reload>Tentar de novo</button></div>`
   :`<div class="empty" style="margin-top:24px"><b>Não conectou ao Firebase</b>Confira se o login anônimo está ativado no Firebase e se o firebaseConfig está certo. (${esc(S.why)})<br><br><button class="btn pri" type="button" data-reload>Tentar de novo</button></div>`;
 }
+function renderLocked(){
+  $("app").innerHTML=`${modeBanner()}<div class="empty" style="margin-top:20px"><b>Área do dono</b>${ROLES[ROLE].n} mostra quanto entrou no dia. Digite a senha do dono para continuar.<br><br><button class="btn pri" type="button" data-unlock>Digitar a senha</button></div>`;
+}
 function renderRoles(){
   $("app").innerHTML=`${modeBanner()}<h2 class="sec">Quem está neste celular?</h2>
-  <p class="note" style="margin:0 0 6px">Escolha a função deste aparelho. Dá para trocar depois tocando no nome lá em cima.</p>
-  <div class="roles">${Object.entries(ROLES).map(([k,r])=>`<button class="role" type="button" data-role="${k}"><b><span class="dot d-${k}"></span>${r.n}</b><span>${r.d}</span></button>`).join("")}</div>`;
+  <p class="note" style="margin:0 0 6px">Escolha a função deste aparelho. Caixa e Garçom e caixa pedem a senha do dono, e só o dono troca a função depois.</p>
+  <div class="roles">${Object.entries(ROLES).map(([k,r])=>`<button class="role" type="button" data-role="${k}"><b><span class="dot d-${k}"></span>${r.n}</b><span>${r.d}${isCaixaRole(k)?" · <b style=\"font:600 14px var(--cond);letter-spacing:.06em;text-transform:uppercase;color:var(--gold)\">senha do dono</b>":""}</span></button>`).join("")}</div>`;
 }
 
 /* ---------- garçom: mapa de mesas ---------- */
@@ -527,7 +578,8 @@ function renderCaixa(){
   $("app").innerHTML=`${modeBanner()}<nav class="tabs" aria-label="Seções do caixa">${[["contas","Contas",abertas.length],["bebidas","Bebidas",beb],["dia","Caixa do dia",0],["ajustes","Ajustes",0]].map(([k,n,c])=>`<button class="tab" type="button" data-tab="${k}" aria-pressed="${CTAB===k}">${n}${c?`<i>${c}</i>`:""}</button>`).join("")}</nav>${body}`;
 }
 function ajustesHTML(){return `<div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Número de mesas</b><p class="note" style="margin:4px 0 10px">Quantas mesas aparecem no celular do garçom.</p><div class="step"><button class="qb" type="button" data-mesas="-1" aria-label="Menos mesas">−</button><b id="nMesas">${CONFIG.mesas}</b><button class="qb" type="button" data-mesas="1" aria-label="Mais mesas">+</button></div></div>
-    <div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Conectar outro celular</b><p class="note" style="margin:6px 0 10px">${S.mode==="fb"?"Mande este link para o funcionário. Ao abrir, o celular já entra no estabelecimento; depois ele escolhe a função.":"Configure o Firebase para conectar os celulares."}</p>${S.mode==="fb"?`<p class="note" style="margin:0 0 10px">Código: <b style="color:var(--ash)">${esc(CODE)}</b></p><button class="btn wide" type="button" data-copylink>Copiar link de acesso</button><button class="btn ghost wide" type="button" data-trocaloja style="margin-top:8px">Trocar de estabelecimento</button>`:""}</div>`}
+    <div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Conectar outro celular</b><p class="note" style="margin:6px 0 10px">${S.mode==="fb"?"Mande este link para o funcionário. Ao abrir, o celular já entra no estabelecimento; depois ele escolhe a função.":"Configure o Firebase para conectar os celulares."}</p>${S.mode==="fb"?`<p class="note" style="margin:0 0 10px">Código: <b style="color:var(--ash)">${esc(CODE)}</b></p><button class="btn wide" type="button" data-copylink>Copiar link de acesso</button><button class="btn ghost wide" type="button" data-trocaloja style="margin-top:8px">Trocar de estabelecimento</button>`:""}</div>
+    <div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Senha do dono</b><p class="note" style="margin:6px 0 10px">Ela protege o caixa do dia e a troca de função dos celulares. Quem não souber a senha só usa Garçom, Churrasqueira ou Cozinha.</p><button class="btn wide" type="button" data-trocasenha>Trocar senha do dono</button></div>`}
 function atendTabs(){const beb=TICKETS.filter(t=>t.setor==="bebidas"&&(t.status==="novo"||t.status==="preparo")).length,ab=Object.keys(CONTAS).length;
   return`<nav class="tabs" aria-label="Seções">${[["mesas","Mesas",ab],["bebidas","Bebidas",beb],["dia","Caixa do dia",0],["ajustes","Ajustes",0]].map(([k,n,c])=>`<button class="tab" type="button" data-atab="${k}" aria-pressed="${ATAB===k}">${n}${c?`<i>${c}</i>`:""}</button>`).join("")}</nav>`}
 function renderAtend(){
@@ -565,7 +617,8 @@ async function fecharConta(m){
   if(CLOSING)return;CLOSING=true;const b=$("fecharSim");if(b){b.disabled=true;b.textContent="Fechando…"}
   const c=CONTAS[m],p=pay(m),T=totals(m),now=Date.now();
   try{
-    if(c.itens&&c.itens.length)await add("fechamentos",{mesa:m,itens:agg(c.itens).map(i=>({n:i.n,extra:i.extra,p:i.p,q:i.q})),subtotal:T.sub,servico:T.serv,total:T.tot,pagamento:p.forma,pessoas:p.pessoas,abertaEm:c.abertaEm,fechadoEm:now,dia:today()});
+    if(!KEY){toast("Abra o caixa com a senha do dono para fechar contas.",true);CLOSING=false;return}
+    if(c.itens&&c.itens.length)await add("cx_"+KEY,{mesa:m,itens:agg(c.itens).map(i=>({n:i.n,extra:i.extra,p:i.p,q:i.q})),subtotal:T.sub,servico:T.serv,total:T.tot,pagamento:p.forma,pessoas:p.pessoas,abertaEm:c.abertaEm,fechadoEm:now,dia:today()});
     for(const t of TICKETS.filter(t=>t.mesa===m&&t.conta===c.abertaEm))await del("tickets/"+t._id);
     await del("contas/m"+m);
     delete PAY[m];CMESA=null;if(ROLE==="atend")VIEW="mesas";toast("Mesa "+m+" fechada · "+brl(T.tot));
@@ -581,7 +634,7 @@ async function tirarItem(m,k){
 
 /* ================= folha (sheet) ================= */
 function sheet(html){$("sheetIn").innerHTML=html;$("sheet").hidden=false}
-function closeSheet(){$("sheet").hidden=true;$("sheetIn").innerHTML="";OPT=null}
+function closeSheet(){$("sheet").hidden=true;$("sheetIn").innerHTML="";OPT=null;if(PINRES){const r=PINRES;PINRES=null;r(null)}}
 $("sheet").addEventListener("click",e=>{if(e.target===$("sheet")||e.target.closest("[data-close]"))closeSheet()});
 addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("sheet").hidden)closeSheet()});
 
@@ -595,8 +648,13 @@ document.addEventListener("click",async e=>{
   if(d.reload!==undefined){location.reload();return}
   if(d.copylink!==undefined){const link=location.origin+location.pathname+"#loja="+CODE;try{await navigator.clipboard.writeText(link);toast("Link copiado. Mande no WhatsApp do funcionário.")}catch(err){toast(link)}return}
   if(d.trocaloja!==undefined){if(!t.dataset.sure){t.dataset.sure=1;t.textContent="Toque de novo para confirmar";return}ls("gbc_loja",null);location.reload();return}
-  if(t.id==="roleBtn"){ROLE="";ls("gbc_role",null);VIEW="mesas";CMESA=null;ATAB="mesas";closeSheet();render();scrollTo(0,0);return}
-  if(d.role){ROLE=d.role;ls("gbc_role",ROLE);audioOn();keepAwake();render();scrollTo(0,0);return}
+  if(d.trocasenha!==undefined){trocarSenha();return}
+  if(d.unlock!==undefined){const k=await pinSheet("Senha do dono","Digite a senha do dono.","check");if(k){setKey(k);render()}return}
+  if(t.id==="roleBtn"){if(OWNER||!OWNER_OK){const k=await pinSheet("Trocar de função","Só o dono troca a função deste celular. Digite a senha do dono.","check");if(!k)return;UNLOCK=k}
+    ROLE="";ls("gbc_role",null);VIEW="mesas";CMESA=null;ATAB="mesas";closeSheet();render();scrollTo(0,0);return}
+  if(d.role){
+    if(isCaixaRole(d.role)){const k=UNLOCK||await pinSheet("Acesso do dono","Digite a senha do dono para entrar no caixa.","check");if(!k)return;setKey(k)}else setKey("");
+    UNLOCK=null;ROLE=d.role;ls("gbc_role",ROLE);audioOn();keepAwake();render();scrollTo(0,0);return}
   if(d.mesa){VIEW=+d.mesa;DRAFT=[];render();scrollTo(0,0);return}
   if(d.go==="mesas"){if(draftCount()&&!t.dataset.sure){t.dataset.sure=1;t.textContent="Sair sem enviar?";setTimeout(()=>{if(t.isConnected){delete t.dataset.sure;t.textContent="‹ Mesas"}},2500);return}VIEW="mesas";DRAFT=[];render();scrollTo(0,0);return}
   if(d.jump){const s=$("cat-"+d.jump);if(s){const y=s.getBoundingClientRect().top+scrollY-120;scrollTo({top:y,behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth"})}return}

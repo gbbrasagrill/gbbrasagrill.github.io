@@ -312,11 +312,12 @@ let READY=false,LOADED={c:false,t:false};
 let VIEW="mesas";       // garçom: "mesas" ou número da mesa
 let CTAB="contas";      // caixa: contas | bebidas | dia | ajustes
 let CMESA=null;         // caixa: mesa aberta no detalhe
+let ATAB="mesas";       // garçom e caixa: mesas | bebidas | dia | ajustes
 let PAY={};             // caixa: forma de pagamento etc. por mesa
 let DRAFT=[];           // garçom: itens ainda não enviados
 let SEEN=null;          // ids de pedidos já vistos (para tocar o alerta)
 let SEEN_READY=null;
-const ROLES={garcom:{n:"Garçom",d:"Abre as mesas e lança os pedidos"},churrasqueira:{n:"Churrasqueira",d:"Recebe os espetos e queijos de cada mesa"},cozinha:{n:"Cozinha",d:"Recebe jantinhas, tropeiro, porções e petiscos"},caixa:{n:"Caixa",d:"Fecha as contas, separa as bebidas e vê o caixa do dia"}};
+const ROLES={atend:{n:"Garçom e caixa",d:"Atende as mesas, lança os pedidos e fecha as contas"},garcom:{n:"Garçom",d:"Só abre as mesas e lança os pedidos"},churrasqueira:{n:"Churrasqueira",d:"Recebe os espetos e queijos de cada mesa"},cozinha:{n:"Cozinha",d:"Recebe jantinhas, tropeiro, porções e petiscos"},caixa:{n:"Caixa",d:"Fecha as contas, separa as bebidas e vê o caixa do dia"}};
 
 function setSync(){const s=$("sync");if(!s)return;s.className="sync "+(DBDEAD||S.mode==="fail"?"":S.mode==="local"?"local":READY?"on":"wait");
   s.title=DBDEAD?"Sem conexão":S.mode==="local"?"Modo teste: só neste aparelho":READY?"Sincronizado":"Conectando"}
@@ -326,7 +327,7 @@ let AC=null;
 function audioOn(){try{AC=AC||new (window.AudioContext||window.webkitAudioContext)();if(AC.state==="suspended")AC.resume()}catch(e){}}
 function beep(n){try{if(!AC)return;const t0=AC.currentTime;for(let i=0;i<(n||2);i++){const o=AC.createOscillator(),g=AC.createGain();o.type="square";o.frequency.value=i%2?1320:990;g.gain.setValueAtTime(.0001,t0+i*.22);g.gain.exponentialRampToValueAtTime(.25,t0+i*.22+.02);g.gain.exponentialRampToValueAtTime(.0001,t0+i*.22+.18);o.connect(g).connect(AC.destination);o.start(t0+i*.22);o.stop(t0+i*.22+.2)}}catch(e){}try{navigator.vibrate&&navigator.vibrate([180,80,180])}catch(e){}}
 document.addEventListener("pointerdown",audioOn,{passive:true});
-let WL=null;async function keepAwake(){try{if(navigator.wakeLock&&document.visibilityState==="visible"&&(ROLE==="churrasqueira"||ROLE==="cozinha"||ROLE==="caixa"))WL=await navigator.wakeLock.request("screen")}catch(e){}}
+let WL=null;async function keepAwake(){try{if(navigator.wakeLock&&document.visibilityState==="visible"&&(ROLE==="churrasqueira"||ROLE==="cozinha"||ROLE==="caixa"||ROLE==="atend"))WL=await navigator.wakeLock.request("screen")}catch(e){}}
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")keepAwake()});
 
 /* ================= assinaturas ================= */
@@ -340,13 +341,13 @@ function subscribe(){
   watch("fechamentos",docs=>{FECH=docs.sort((a,b)=>b.fechadoEm-a.fechadoEm);refresh()},["dia",today()]);
 }
 function alerts(meta){
-  const mine=TICKETS.filter(t=>t.setor===ROLE||(ROLE==="caixa"&&t.setor==="bebidas"));
+  const mine=TICKETS.filter(t=>t.setor===ROLE||((ROLE==="caixa"||ROLE==="atend")&&t.setor==="bebidas"));
   const fresh=mine.filter(t=>t.status==="novo");
   if(SEEN===null){SEEN=new Set(TICKETS.map(t=>t._id));SEEN_READY=new Set(TICKETS.filter(t=>t.status==="pronto").map(t=>t._id));return}
   let ring=false;fresh.forEach(t=>{if(!SEEN.has(t._id)){ring=true;NEWIDS.add(t._id);setTimeout(()=>NEWIDS.delete(t._id),4000)}});
   TICKETS.forEach(t=>SEEN.add(t._id));
   if(ring&&ROLE!=="garcom")beep(3);
-  if(ROLE==="garcom"){let r=false;TICKETS.filter(t=>t.status==="pronto").forEach(t=>{if(!SEEN_READY.has(t._id)){r=true;SEEN_READY.add(t._id)}});if(r)beep(2)}
+  if(ROLE==="garcom"||ROLE==="atend"){let r=false;TICKETS.filter(t=>t.status==="pronto").forEach(t=>{if(!SEEN_READY.has(t._id)){SEEN_READY.add(t._id);if(!(t.setor==="bebidas"&&t.criado===t.atualizado))r=true}});if(r)beep(2)}
 }
 const NEWIDS=new Set();
 
@@ -359,6 +360,7 @@ function render(){
   if(S.mode==="fb"&&!CODE){$("roleBtn").hidden=true;return renderCode()}
   if(!ROLE)return renderRoles();
   if(ROLE==="garcom")return VIEW==="mesas"?renderMesas():renderMesa();
+  if(ROLE==="atend")return renderAtend();
   if(ROLE==="caixa")return renderCaixa();
   renderSetor(ROLE);
 }
@@ -366,7 +368,9 @@ function render(){
 function refresh(){
   if(!S.mode)return;
   if(!ROLE)return;
-  if(ROLE==="garcom"){if(VIEW==="mesas")renderMesas();else{renderMesaTop();renderNaMesa()}return}
+  const typing=()=>{const a=document.activeElement;return a&&a.tagName==="INPUT"&&$("app").contains(a)};
+  if(ROLE==="atend"&&(CMESA!==null||ATAB!=="mesas")){if(typing()){PENDING=true;return}renderAtend();return}
+  if(ROLE==="garcom"||ROLE==="atend"){if(VIEW==="mesas")renderMesas();else{renderMesaTop();renderNaMesa()}return}
   if(ROLE==="caixa"){const a=document.activeElement;if(a&&a.tagName==="INPUT"&&$("app").contains(a)){PENDING=true;return}renderCaixa();return}
   renderSetor(ROLE);
 }
@@ -405,7 +409,7 @@ function renderMesas(){
   const nums=Array.from({length:CONFIG.mesas},(_,i)=>i+1);
   Object.keys(CONTAS).map(Number).forEach(m=>{if(!nums.includes(m))nums.push(m)});
   const abertas=Object.keys(CONTAS).length;
-  $("app").innerHTML=`${modeBanner()}
+  $("app").innerHTML=`${modeBanner()}${ROLE==="atend"?atendTabs():""}
   ${prontos.length?`<h2 class="sec">Pronto para levar <small>${prontos.length}</small></h2><div class="ready-list">${prontos.map(t=>`<div class="rd"><div><b>Mesa ${t.mesa}</b> <span class="pill" style="background:var(--coal4)"><span class="dot d-${t.setor}"></span>${SETOR[t.setor]}</span><p>${t.itens.map(i=>esc(i.q+"× "+i.n)).join(", ")}</p></div><button class="btn ok" type="button" data-levei="${t._id}">Levei</button></div>`).join("")}</div>`:""}
   <h2 class="sec">Mesas <small>${abertas?abertas+" aberta"+(abertas>1?"s":""):"todas livres"}</small></h2>
   <div class="mesas">${nums.map(m=>{const i=mesaInfo(m);return`<button class="mesa${i?" occ":""}" type="button" data-mesa="${m}" aria-label="Mesa ${m}${i?", aberta, "+brl(i.total):", livre"}">
@@ -430,7 +434,7 @@ function renderNaMesa(){
   if(!c){el.innerHTML="";return}
   const tk=TICKETS.filter(t=>t.mesa===VIEW&&t.conta===c.abertaEm);
   el.innerHTML=`<div class="box"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b style="font:400 20px var(--display);text-transform:uppercase">Pedidos da mesa</b>
-    <button class="btn ${c.pediuConta?"":"ghost"}" type="button" data-pediu style="margin-left:auto;min-height:40px;padding:8px 12px;font-size:14px${c.pediuConta?";background:var(--gold);color:#2a1600":""}">${c.pediuConta?"Conta pedida ✓":"Pedir a conta"}</button></div>
+    ${ROLE==="atend"?`<button class="btn pri" type="button" data-conta="${VIEW}" style="margin-left:auto;min-height:40px;padding:8px 14px;font-size:14px">Fechar conta</button>`:`<button class="btn ${c.pediuConta?"":"ghost"}" type="button" data-pediu style="margin-left:auto;min-height:40px;padding:8px 12px;font-size:14px${c.pediuConta?";background:var(--gold);color:#2a1600":""}">${c.pediuConta?"Conta pedida ✓":"Pedir a conta"}</button>`}</div>
     ${tk.length?tk.map(t=>`<div class="tk"><div class="h"><span><span class="dot d-${t.setor}"></span>${SETOR[t.setor]}</span><span>${hhmm(t.criado)}</span><span class="pill p-${t.status}">${STATUS[t.status]}</span>${t.status==="pronto"?`<button class="btn ok" type="button" data-levei="${t._id}" style="margin-left:auto;min-height:36px;padding:6px 12px;font-size:14px">Levei</button>`:""}</div><div class="its">${t.itens.map(i=>esc(i.q+"× "+i.n+(i.extra?" ("+i.extra+")":"")+(i.obs?" · "+i.obs:""))).join("<br>")}</div></div>`).join(""):'<p class="note" style="margin:0">Nenhum pedido enviado ainda.</p>'}</div>`;
 }
 const STATUS={novo:"Na fila",preparo:"Fazendo",pronto:"Pronto",entregue:"Entregue"};
@@ -488,7 +492,7 @@ async function enviar(){
   const porSetor={};DRAFT.forEach(d=>d.lines.forEach(l=>{(porSetor[l.setor]=porSetor[l.setor]||[]).push({q:d.q,n:l.n,extra:l.extra,obs:d.obs.trim()})}));
   try{
     await put("contas/m"+m,{mesa:m,abertaEm,itens:(c?c.itens:[]).concat(novos),pediuConta:false,atualizado:now});
-    for(const s of Object.keys(porSetor))await add("tickets",{mesa:m,conta:abertaEm,setor:s,itens:porSetor[s],status:"novo",criado:now,atualizado:now});
+    for(const s of Object.keys(porSetor))await add("tickets",{mesa:m,conta:abertaEm,setor:s,itens:porSetor[s],status:ROLE==="atend"&&s==="bebidas"?"pronto":"novo",criado:now,atualizado:now});
     DRAFT=[];closeSheet();renderDraftBar();toast("Pedido da Mesa "+m+" enviado");
   }catch(e){writeErr(e);if(b){b.disabled=false;b.textContent="Tentar enviar de novo"}}
   SENDING=false;
@@ -519,14 +523,23 @@ function renderCaixa(){
   if(CTAB==="contas")body=CMESA!==null?contaHTML(CMESA):(abertas.length?`<div class="acc">${abertas.map(c=>`<button class="ac" type="button" data-conta="${c.mesa}"><span class="num">${c.mesa}</span><span><b style="font:700 17px var(--cond);text-transform:uppercase">Mesa ${c.mesa}</b>${c.pediuConta?' <span class="flag bill" style="position:static">Pediu a conta</span>':""}<br><span class="note">Aberta às ${hhmm(c.abertaEm)} · ${agg(c.itens).reduce((a,i)=>a+i.q,0)} itens</span></span><span class="v">${brl(sumItens(c.itens))}</span></button>`).join("")}</div>`:`<div class="empty"><b>Nenhuma mesa aberta</b>Quando o garçom lançar um pedido, a conta da mesa aparece aqui.</div>`);
   if(CTAB==="bebidas")body=stationHTML("bebidas");
   if(CTAB==="dia")body=diaHTML();
-  if(CTAB==="ajustes")body=`<div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Número de mesas</b><p class="note" style="margin:4px 0 10px">Quantas mesas aparecem no celular do garçom.</p><div class="step"><button class="qb" type="button" data-mesas="-1" aria-label="Menos mesas">−</button><b id="nMesas">${CONFIG.mesas}</b><button class="qb" type="button" data-mesas="1" aria-label="Mais mesas">+</button></div></div>
-    <div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Conectar outro celular</b><p class="note" style="margin:6px 0 10px">${S.mode==="fb"?"Mande este link para o funcionário. Ao abrir, o celular já entra no estabelecimento; depois ele escolhe a função.":"Configure o Firebase para conectar os celulares."}</p>${S.mode==="fb"?`<p class="note" style="margin:0 0 10px">Código: <b style="color:var(--ash)">${esc(CODE)}</b></p><button class="btn wide" type="button" data-copylink>Copiar link de acesso</button><button class="btn ghost wide" type="button" data-trocaloja style="margin-top:8px">Trocar de estabelecimento</button>`:""}</div>`;
+  if(CTAB==="ajustes")body=ajustesHTML();
   $("app").innerHTML=`${modeBanner()}<nav class="tabs" aria-label="Seções do caixa">${[["contas","Contas",abertas.length],["bebidas","Bebidas",beb],["dia","Caixa do dia",0],["ajustes","Ajustes",0]].map(([k,n,c])=>`<button class="tab" type="button" data-tab="${k}" aria-pressed="${CTAB===k}">${n}${c?`<i>${c}</i>`:""}</button>`).join("")}</nav>${body}`;
+}
+function ajustesHTML(){return `<div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Número de mesas</b><p class="note" style="margin:4px 0 10px">Quantas mesas aparecem no celular do garçom.</p><div class="step"><button class="qb" type="button" data-mesas="-1" aria-label="Menos mesas">−</button><b id="nMesas">${CONFIG.mesas}</b><button class="qb" type="button" data-mesas="1" aria-label="Mais mesas">+</button></div></div>
+    <div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Conectar outro celular</b><p class="note" style="margin:6px 0 10px">${S.mode==="fb"?"Mande este link para o funcionário. Ao abrir, o celular já entra no estabelecimento; depois ele escolhe a função.":"Configure o Firebase para conectar os celulares."}</p>${S.mode==="fb"?`<p class="note" style="margin:0 0 10px">Código: <b style="color:var(--ash)">${esc(CODE)}</b></p><button class="btn wide" type="button" data-copylink>Copiar link de acesso</button><button class="btn ghost wide" type="button" data-trocaloja style="margin-top:8px">Trocar de estabelecimento</button>`:""}</div>`}
+function atendTabs(){const beb=TICKETS.filter(t=>t.setor==="bebidas"&&(t.status==="novo"||t.status==="preparo")).length,ab=Object.keys(CONTAS).length;
+  return`<nav class="tabs" aria-label="Seções">${[["mesas","Mesas",ab],["bebidas","Bebidas",beb],["dia","Caixa do dia",0],["ajustes","Ajustes",0]].map(([k,n,c])=>`<button class="tab" type="button" data-atab="${k}" aria-pressed="${ATAB===k}">${n}${c?`<i>${c}</i>`:""}</button>`).join("")}</nav>`}
+function renderAtend(){
+  if(CMESA!==null&&!CONTAS[CMESA])CMESA=null;
+  if(CMESA!==null){$("app").innerHTML=modeBanner()+contaHTML(CMESA);return}
+  if(ATAB==="mesas")return VIEW==="mesas"?renderMesas():renderMesa();
+  $("app").innerHTML=modeBanner()+atendTabs()+(ATAB==="bebidas"?stationHTML("bebidas"):ATAB==="dia"?diaHTML():ajustesHTML());
 }
 function contaHTML(m){
   const c=CONTAS[m],p=pay(m),T=totals(m),its=agg(c.itens);
   const rec=parseFloat(String(p.recebido).replace(",","."))||0;
-  return`<div class="mhead"><button class="back" type="button" data-conta="" aria-label="Voltar para as contas">‹ Contas</button><h1>Mesa ${m}</h1><div class="tot"><small>Aberta às ${hhmm(c.abertaEm)}</small>${brl(T.tot)}</div></div>
+  return`<div class="mhead"><button class="back" type="button" data-conta="" aria-label="Voltar">‹ ${ROLE==="atend"?"Voltar":"Contas"}</button><h1>Mesa ${m}</h1><div class="tot"><small>Aberta às ${hhmm(c.abertaEm)}</small>${brl(T.tot)}</div></div>
   <div class="box"><div class="lines">${its.length?its.map(i=>`<div class="ln"><span class="q">${i.q}×</span><span>${esc(i.n)}${i.extra?`<small>${esc(i.extra)}</small>`:""}<small>${brl(i.p)} cada</small></span><span class="v">${brl(i.p*i.q)}</span><button class="qb" type="button" data-rm="${esc(i.k)}" aria-label="Tirar um ${esc(i.n)}">−</button></div>`).join(""):'<p class="note">Sem itens nesta conta.</p>'}</div>
   <div class="sum"><div class="r"><span>Consumo</span><span>${brl(T.sub)}</span></div>${p.servico?`<div class="r"><span>Serviço (10%)</span><span>${brl(T.serv)}</span></div>`:""}<div class="r"><span>Total</span><span class="big">${brl(T.tot)}</span></div>${p.pessoas>1?`<div class="r"><span>Por pessoa (${p.pessoas})</span><b>${brl(T.cada)}</b></div>`:""}</div></div>
   <div class="box" style="display:grid;gap:12px">
@@ -555,7 +568,7 @@ async function fecharConta(m){
     if(c.itens&&c.itens.length)await add("fechamentos",{mesa:m,itens:agg(c.itens).map(i=>({n:i.n,extra:i.extra,p:i.p,q:i.q})),subtotal:T.sub,servico:T.serv,total:T.tot,pagamento:p.forma,pessoas:p.pessoas,abertaEm:c.abertaEm,fechadoEm:now,dia:today()});
     for(const t of TICKETS.filter(t=>t.mesa===m&&t.conta===c.abertaEm))await del("tickets/"+t._id);
     await del("contas/m"+m);
-    delete PAY[m];CMESA=null;toast("Mesa "+m+" fechada · "+brl(T.tot));
+    delete PAY[m];CMESA=null;if(ROLE==="atend")VIEW="mesas";toast("Mesa "+m+" fechada · "+brl(T.tot));
   }catch(e){writeErr(e)}
   CLOSING=false;render();
 }
@@ -582,7 +595,7 @@ document.addEventListener("click",async e=>{
   if(d.reload!==undefined){location.reload();return}
   if(d.copylink!==undefined){const link=location.origin+location.pathname+"#loja="+CODE;try{await navigator.clipboard.writeText(link);toast("Link copiado. Mande no WhatsApp do funcionário.")}catch(err){toast(link)}return}
   if(d.trocaloja!==undefined){if(!t.dataset.sure){t.dataset.sure=1;t.textContent="Toque de novo para confirmar";return}ls("gbc_loja",null);location.reload();return}
-  if(t.id==="roleBtn"){ROLE="";ls("gbc_role",null);VIEW="mesas";CMESA=null;closeSheet();render();scrollTo(0,0);return}
+  if(t.id==="roleBtn"){ROLE="";ls("gbc_role",null);VIEW="mesas";CMESA=null;ATAB="mesas";closeSheet();render();scrollTo(0,0);return}
   if(d.role){ROLE=d.role;ls("gbc_role",ROLE);audioOn();keepAwake();render();scrollTo(0,0);return}
   if(d.mesa){VIEW=+d.mesa;DRAFT=[];render();scrollTo(0,0);return}
   if(d.go==="mesas"){if(draftCount()&&!t.dataset.sure){t.dataset.sure=1;t.textContent="Sair sem enviar?";setTimeout(()=>{if(t.isConnected){delete t.dataset.sure;t.textContent="‹ Mesas"}},2500);return}VIEW="mesas";DRAFT=[];render();scrollTo(0,0);return}
@@ -595,18 +608,19 @@ document.addEventListener("click",async e=>{
   if(d.levei){try{await patch("tickets/"+d.levei,{status:"entregue",atualizado:Date.now()})}catch(err){writeErr(err)}return}
   if(d.st){try{await patch("tickets/"+d.st,{status:d.v,atualizado:Date.now()})}catch(err){writeErr(err)}return}
   if(d.tab){CTAB=d.tab;CMESA=null;renderCaixa();scrollTo(0,0);return}
-  if(d.conta!==undefined){CMESA=d.conta===""?null:+d.conta;renderCaixa();scrollTo(0,0);return}
+  if(d.atab){ATAB=d.atab;VIEW="mesas";CMESA=null;DRAFT=[];render();scrollTo(0,0);return}
+  if(d.conta!==undefined){CMESA=d.conta===""?null:+d.conta;render();scrollTo(0,0);return}
   if(d.rm){await tirarItem(CMESA,d.rm);return}
-  if(d.serv!==undefined){const p=pay(CMESA);p.servico=!p.servico;p.confirm=false;renderCaixa();return}
-  if(d.pes){const p=pay(CMESA);p.pessoas=Math.max(1,Math.min(30,p.pessoas+ +d.pes));renderCaixa();return}
-  if(d.forma){const p=pay(CMESA);p.forma=d.forma;p.confirm=false;renderCaixa();return}
-  if(d.fechar){const p=pay(CMESA);if(d.fechar==="pedir"){p.confirm=true;renderCaixa()}else if(d.fechar==="nao"){p.confirm=false;renderCaixa()}else fecharConta(CMESA);return}
+  if(d.serv!==undefined){const p=pay(CMESA);p.servico=!p.servico;p.confirm=false;render();return}
+  if(d.pes){const p=pay(CMESA);p.pessoas=Math.max(1,Math.min(30,p.pessoas+ +d.pes));render();return}
+  if(d.forma){const p=pay(CMESA);p.forma=d.forma;p.confirm=false;render();return}
+  if(d.fechar){const p=pay(CMESA);if(d.fechar==="pedir"){p.confirm=true;render()}else if(d.fechar==="nao"){p.confirm=false;render()}else fecharConta(CMESA);return}
   if(d.mesas){const n=Math.max(1,Math.min(60,CONFIG.mesas+ +d.mesas));CONFIG.mesas=n;$("nMesas").textContent=n;clearTimeout(MT);MT=setTimeout(async()=>{try{await put("config/geral",{mesas:CONFIG.mesas})}catch(err){writeErr(err)}},700);return}
 });
 let MT;
 
 /* relógio: atualiza os "há X min" sem gravar nada */
-setInterval(()=>{if(ROLE&&S.mode&&!(ROLE==="garcom"&&VIEW!=="mesas"))refresh();else if(ROLE==="garcom")renderMesaTop()},30000);
+setInterval(()=>{const g=ROLE==="garcom"||(ROLE==="atend"&&ATAB==="mesas"&&CMESA===null);if(ROLE&&S.mode&&!(g&&VIEW!=="mesas"))refresh();else if(g)renderMesaTop()},30000);
 
 (async()=>{
   await initStore();

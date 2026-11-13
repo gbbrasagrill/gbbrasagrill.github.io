@@ -1,0 +1,19 @@
+{
+  "name": "Comanda GB Brasa",
+  "short_name": "Comanda",
+  "description": "Comanda do GB Brasa Grill: garçom, churrasqueira, cozinha e caixa conectados.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "lang": "pt-BR",
+  "background_color": "#120e0c",
+  "theme_color": "#1c1613",
+  "categories": ["business", "food"],
+  "icons": [
+    {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

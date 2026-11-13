@@ -275,12 +275,12 @@ async function initStore(){
 const FP=p=>"lojas/"+CODE+"/"+p;
 const ROWS=s=>s.docs.map(d=>Object.assign({},d.data(),{_id:d.id}));
 function watch(col,cb,where){
-  if(S.mode==="fb"){let q=S.fs.collection(FP(col));if(where)q=q.where(where[0],"==",where[1]);return q.onSnapshot(s=>cb(ROWS(s),s.metadata),e=>dbError(e))}
+  if(S.mode==="fb"){let q=S.fs.collection(FP(col));if(where)q=q.where(where[0],"==",where[1]);return q.onSnapshot({includeMetadataChanges:true},s=>cb(ROWS(s),s.metadata),e=>dbError(e))}
   const sub={fire(){const m=LOCAL.data[col]||{};cb(Object.keys(m).map(id=>Object.assign({},m[id],{_id:id})).filter(d=>!where||d[where[0]]===where[1]),{fromCache:false})}};
   LOCAL.subs.push(sub);setTimeout(()=>sub.fire(),0);return()=>{LOCAL.subs=LOCAL.subs.filter(x=>x!==sub)};
 }
 function watchDoc(path,cb){
-  if(S.mode==="fb")return S.fs.doc(FP(path)).onSnapshot(d=>cb(d.exists?d.data():null,d.metadata),e=>dbError(e));
+  if(S.mode==="fb")return S.fs.doc(FP(path)).onSnapshot({includeMetadataChanges:true},d=>cb(d.exists?d.data():null,d.metadata),e=>dbError(e));
   const[c,id]=splitPath(path);const sub={fire(){const m=LOCAL.data[c]||{};cb(m[id]?Object.assign({},m[id]):null,{fromCache:false})}};
   LOCAL.subs.push(sub);setTimeout(()=>sub.fire(),0);return()=>{LOCAL.subs=LOCAL.subs.filter(x=>x!==sub)};
 }
@@ -397,7 +397,7 @@ let PINRES=null;
 // mode: "check" pede a senha atual (ou cria, se ainda não existe); "new" cria uma senha nova para a chave atual
 function pinSheet(title,msg,mode){
   if(!crypto||!crypto.subtle){toast("Este navegador não abre a área do dono. Use o Chrome atualizado.",true);return Promise.resolve(null)}
-  if(!OWNER_OK&&mode!=="new"){toast("Conectando com a comanda… tente de novo em alguns segundos.",true);return Promise.resolve(null)}
+  if(!OWNER_OK&&!OWNER&&mode!=="new"){toast("Conectando com a comanda… tente de novo em alguns segundos.",true);return Promise.resolve(null)}
   const create=mode==="new"||!OWNER;
   return new Promise(res=>{
     if(PINRES)PINRES(null);PINRES=res;

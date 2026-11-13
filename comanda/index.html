@@ -175,6 +175,21 @@ input[type=text],input[type=number],input[inputmode]{width:100%;background:var(-
 .kpi{background:var(--coal2);border:1px solid var(--line);border-radius:14px;padding:12px}
 .kpi span{display:block;font:700 13px var(--cond);letter-spacing:.08em;text-transform:uppercase;color:var(--ash2)}
 .kpi b{font:400 26px/1.1 var(--display);font-variant-numeric:tabular-nums}
+.item.out{opacity:.55}
+.item.out b{text-decoration:line-through;text-decoration-thickness:2px}
+.item.out .plus{background:var(--coal4);color:var(--ash3)}
+.stk{display:block;font:700 13px var(--cond);letter-spacing:.05em;text-transform:uppercase;color:var(--ash2)}
+.stk.low{color:var(--warn)}.stk.zero{color:var(--bad)}
+.seg button[disabled]{opacity:.45;text-decoration:line-through}
+.sk{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.sk:first-child{border-top:0}
+.sk b.n{font:700 17px/1.15 var(--cond);text-transform:uppercase;letter-spacing:.02em}
+.sk .big{font:400 30px/1 var(--display);font-variant-numeric:tabular-nums;min-width:48px;text-align:center}
+.sk .big.zero{color:var(--bad)}.sk .big.low{color:var(--warn)}.sk .big.off{color:var(--ash3);font-size:22px}
+.sk .acts{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap}
+.sk .acts .btn{min-height:40px;padding:8px 12px;font-size:14px}
+.cnt-row{display:grid;grid-template-columns:minmax(0,1fr) 92px;gap:10px;align-items:center;padding:6px 0}
+.cnt-row span{font:700 16px var(--cond);text-transform:uppercase}
 .toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:60;background:var(--ash);color:var(--coal);border-radius:12px;padding:10px 16px;font:700 15px var(--body);max-width:calc(100% - 32px);box-shadow:0 8px 24px #000a}
 .toast.err{background:var(--bad);color:#fff}
 @media (max-width:440px){.brand span{display:none}.rolebtn{font-size:14px;padding:6px 10px}}
@@ -225,6 +240,7 @@ const CAT=[
    ["d1","Dose de Campari",10,{g:"Doses"}],["d2","Dose de Paratudo",4,{g:"Doses"}],["d3","Dose de 51",4,{g:"Doses"}]]}
 ];
 const ITEM={};CAT.forEach(c=>c.items.forEach(([id,n,p,o])=>{ITEM[id]=Object.assign({id,n,p,cat:c.id,setor:c.setor},o||{})}));
+CAT.filter(c=>c.id==="espetinhos"||c.id==="especiais").forEach(c=>c.items.forEach(([id])=>{ITEM[id].sid=id}));
 
 /* ================= utilidades ================= */
 const $=id=>document.getElementById(id);
@@ -335,6 +351,7 @@ let loadTimer;
 function subscribe(){
   loadTimer=setTimeout(()=>{if(!READY){$("app").insertAdjacentHTML("afterbegin",'<p class="banner err" id="slow">A comanda ainda não respondeu. Confira a internet; ela continua tentando sozinha.</p>')}},10000);
   const ok=(k,meta)=>{if(meta&&meta.fromCache)return;LOADED[k]=true;if(LOADED.c&&LOADED.t&&!READY){READY=true;clearTimeout(loadTimer);const s=$("slow");if(s)s.remove();setSync()}};
+  watchDoc("config/estoque",d=>{STOCK=(d&&d.qtd)||{};SACO=(d&&d.saco)||{};renderStockMarks();if(!(ROLE==="garcom"||ROLE==="atend")||VIEW==="mesas"||CMESA!==null||(ROLE==="atend"&&ATAB!=="mesas"))refresh()});
   watchDoc("config/geral",d=>{if(d&&d.mesas)CONFIG.mesas=Math.max(1,Math.min(60,d.mesas|0));refresh()});
   watch("contas",(docs,meta)=>{CONTAS={};docs.forEach(d=>{CONTAS[d.mesa]=d});ok("c",meta);refresh()});
   watch("tickets",(docs,meta)=>{TICKETS=docs.sort((a,b)=>a.criado-b.criado);ok("t",meta);alerts(meta);refresh()});
@@ -377,6 +394,70 @@ function refresh(){
   renderSetor(ROLE);
 }
 let PENDING=false;
+/* ================= estoque de espetos =================
+   config/estoque guarda {qtd:{e0:50,...}, saco:{e0:10,...}}.
+   Espeto sem número = sem controle (não bloqueia). Cada pedido enviado desconta sozinho. */
+let STOCK={},SACO={};
+const SID={};ESPETOS.forEach((n,i)=>SID[n]="e"+i);ESPECIAIS.forEach((n,i)=>SID[n]="s"+i);
+const SNAME={};Object.keys(SID).forEach(n=>SNAME[SID[n]]=n);
+const STOCK_IDS=Object.values(SID);
+const tracked=k=>typeof STOCK[k]==="number";
+const drafted=k=>DRAFT.reduce((a,d)=>a+(d.sid===k?d.q:0),0);
+const avail=k=>!k||!tracked(k)?Infinity:Math.max(0,STOCK[k])-drafted(k);
+function stockWrite(obj){ // obj: {qtd:{k:valor|{inc:n}|null}, saco:{k:n}}
+  if(S.mode==="fb"){const FV=firebase.firestore.FieldValue,o={};
+    for(const g of Object.keys(obj)){o[g]={};for(const k of Object.keys(obj[g])){const v=obj[g][k];o[g][k]=v===null?FV.delete():(v&&v.inc!==undefined)?FV.increment(v.inc):v}}
+    return fire(S.fs.doc(FP("config/estoque")).set(o,{merge:true}))}
+  const c=(LOCAL.data.config=LOCAL.data.config||{}),d=(c.estoque=c.estoque||{});
+  for(const g of Object.keys(obj)){d[g]=d[g]||{};for(const k of Object.keys(obj[g])){const v=obj[g][k];if(v===null)delete d[g][k];else if(v&&v.inc!==undefined)d[g][k]=(d[g][k]||0)+v.inc;else d[g][k]=v}}
+  localEmit();return Promise.resolve();
+}
+function stockTag(k){if(!tracked(k))return"";const q=avail(k);return q<=0?'<span class="stk zero">Esgotado</span>':`<span class="stk${q<=5?" low":""}">${q===1?"Resta 1":"Restam "+q}</span>`}
+function renderStockMarks(){
+  document.querySelectorAll("[data-add]").forEach(b=>{const k=ITEM[b.dataset.add]&&ITEM[b.dataset.add].sid;if(!k)return;const out=tracked(k)&&avail(k)<=0;b.classList.toggle("out",out);b.disabled=out;const t=b.querySelector("[data-stk]");if(t)t.innerHTML=stockTag(k)});
+}
+function estoqueHTML(){
+  return`<h2 class="sec">Estoque de espetos <small>desconta sozinho a cada pedido</small></h2>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn pri" type="button" data-skcount>Contagem do dia</button><button class="btn" type="button" data-skarrive>Chegou mercadoria</button></div>
+  <div class="box">${STOCK_IDS.map(k=>{const t=tracked(k),q=t?Math.max(0,STOCK[k]):0;return`<div class="sk"><div><b class="n">${esc(SNAME[k])}</b><span class="stk${t&&q<=0?" zero":t&&q<=5?" low":""}">${t?(q<=0?"Esgotado":"no estoque"):"Sem controle: não bloqueia"} · ${SACO[k]||10} por saco</span></div>
+    <span class="big ${t?(q<=0?"zero":q<=5?"low":""):"off"}">${t?q:"—"}</span>
+    <div class="acts"><button class="qb" type="button" data-sk="${k}" data-v="-1" aria-label="Tirar 1 de ${esc(SNAME[k])}">−</button><button class="qb" type="button" data-sk="${k}" data-v="1" aria-label="Pôr 1 de ${esc(SNAME[k])}">+</button><button class="btn ghost" type="button" data-skedit="${k}">Ajustar</button></div></div>`}).join("")}</div>
+  <p class="note">Quando um espeto chega a zero, ele aparece riscado como <b>Esgotado</b> no celular dos garçons e não dá para lançar.</p>`;
+}
+const num=v=>{const n=parseInt(String(v).trim(),10);return Number.isFinite(n)&&n>=0&&n<=9999?n:null};
+function openContagem(){
+  sheet(`<button class="x" type="button" data-close aria-label="Fechar">×</button><h3>Contagem do dia</h3><p class="note" style="margin:0 0 8px">Conte os espetos da estufa e escreva quantos tem de cada. Deixe em branco o que não quiser controlar.</p>
+  <form id="cntForm" novalidate>${STOCK_IDS.map(k=>`<label class="cnt-row" for="cnt-${k}"><span>${esc(SNAME[k])}</span><input type="text" inputmode="numeric" id="cnt-${k}" value="${tracked(k)?Math.max(0,STOCK[k]):""}" placeholder="—" autocomplete="off"></label>`).join("")}
+  <p class="note" id="cntErr" style="color:var(--bad)" hidden>Use só números (0 a 9999).</p><button class="btn pri wide" type="submit" style="margin-top:12px">Salvar contagem</button></form>`);
+  $("cntForm").oninput=()=>{$("cntErr").hidden=true};
+  $("cntForm").onsubmit=e=>{e.preventDefault();const q={};for(const k of STOCK_IDS){const v=$("cnt-"+k).value;if(v.trim()===""){q[k]=null;continue}const n=num(v);if(n===null){$("cntErr").hidden=false;return}q[k]=n}
+    stockWrite({qtd:q}).then(()=>{closeSheet();toast("Contagem salva")})};
+}
+function openChegou(){
+  sheet(`<button class="x" type="button" data-close aria-label="Fechar">×</button><h3>Chegou mercadoria</h3><p class="note" style="margin:0 0 8px">Escreva quantos sacos chegaram de cada espeto. O total soma no estoque.</p>
+  <form id="arrForm" novalidate>${STOCK_IDS.map(k=>`<div class="cnt-row" style="grid-template-columns:minmax(0,1fr) 70px 70px"><span>${esc(SNAME[k])}<small class="note" style="display:block;font:500 12px var(--body);text-transform:none" id="arrT-${k}"></small></span><input type="text" inputmode="numeric" id="arrS-${k}" placeholder="sacos" aria-label="Sacos de ${esc(SNAME[k])}" autocomplete="off"><input type="text" inputmode="numeric" id="arrP-${k}" value="${SACO[k]||10}" aria-label="Espetos por saco de ${esc(SNAME[k])}" autocomplete="off"></div>`).join("")}
+  <p class="note" style="margin:6px 0 0">Primeira coluna: sacos. Segunda: espetos em cada saco.</p>
+  <p class="note" id="arrErr" style="color:var(--bad)" hidden>Use só números.</p><button class="btn pri wide" type="submit" style="margin-top:12px">Somar ao estoque</button></form>`);
+  const calc=()=>{STOCK_IDS.forEach(k=>{const a=num($("arrS-"+k).value),b=num($("arrP-"+k).value);$("arrT-"+k).textContent=a&&b?"+"+(a*b)+" espetos":""})};
+  $("arrForm").oninput=()=>{$("arrErr").hidden=true;calc()};
+  $("arrForm").onsubmit=e=>{e.preventDefault();const q={},sc={};let any=false;
+    for(const k of STOCK_IDS){const sv=$("arrS-"+k).value.trim(),pv=$("arrP-"+k).value.trim();if(!sv)continue;const a=num(sv),b=num(pv);if(a===null||!b){$("arrErr").hidden=false;return}
+      q[k]=tracked(k)?{inc:a*b}:Math.max(0,STOCK[k]||0)+a*b;sc[k]=b;any=true}
+    if(!any){closeSheet();return}
+    stockWrite({qtd:q,saco:sc}).then(()=>{closeSheet();toast("Estoque atualizado")})};
+}
+function openAjuste(k){
+  const t=tracked(k);
+  sheet(`<button class="x" type="button" data-close aria-label="Fechar">×</button><h3>${esc(SNAME[k])}</h3><p class="note" style="margin:0">Agora: <b style="color:var(--ash)">${t?Math.max(0,STOCK[k])+" espetos":"sem controle"}</b></p>
+  <form id="ajForm" novalidate><div class="fld"><span>Quantidade certa</span><input type="text" inputmode="numeric" id="ajQ" value="${t?Math.max(0,STOCK[k]):""}" autocomplete="off"></div>
+  <div class="fld"><span>Espetos em cada saco</span><input type="text" inputmode="numeric" id="ajS" value="${SACO[k]||10}" autocomplete="off"></div>
+  <p class="note" id="ajErr" style="color:var(--bad)" hidden>Use só números.</p>
+  <button class="btn pri wide" type="submit" style="margin-top:12px">Salvar</button></form>
+  ${t?`<button class="btn ghost wide" type="button" id="ajOff" style="margin-top:8px">Parar de controlar este espeto</button>`:""}`);
+  $("ajForm").oninput=()=>{$("ajErr").hidden=true};
+  $("ajForm").onsubmit=e=>{e.preventDefault();const q=num($("ajQ").value),sc=num($("ajS").value);if(q===null||!sc){$("ajErr").hidden=false;return}stockWrite({qtd:{[k]:q},saco:{[k]:sc}}).then(()=>{closeSheet();toast("Estoque salvo")})};
+  if($("ajOff"))$("ajOff").onclick=()=>{stockWrite({qtd:{[k]:null}}).then(()=>{closeSheet();toast(SNAME[k]+" sem controle de estoque")})};
+}
 /* ================= senha do dono =================
    O caixa do dia fica guardado num endereço secreto (a "chave do caixa").
    A chave só abre com a senha do dono; garçom, churrasqueira e cozinha não chegam nela. */
@@ -476,7 +557,7 @@ function renderMesa(){
   <div id="naMesa"></div>
   <nav class="chips" aria-label="Categorias">${CAT.map(c=>`<button class="chip" type="button" data-jump="${c.id}">${c.t}</button>`).join("")}</nav>
   <div id="cardapio">${CAT.map(c=>{let g="";return`<section class="cat" id="cat-${c.id}"><h3><span class="dot d-${c.setor}"></span>${c.t}<small>${SETOR[c.setor]}</small></h3>${c.items.map(([id])=>{const it=ITEM[id];const head=it.g&&it.g!==g?`<div class="grp">${esc(it.g)}</div>`:"";g=it.g||g;
-    return head+`<button class="item" type="button" data-add="${id}"><span><b>${esc(it.n)}</b>${it.d?`<small>${esc(it.d)}</small>`:""}</span><span class="ip">${brl(it.p)}</span><span class="plus" aria-hidden="true">+<i data-q="${id}" hidden></i></span></button>`}).join("")}</section>`}).join("")}</div>`;
+    return head+`<button class="item" type="button" data-add="${id}"><span><b>${esc(it.n)}</b>${it.d?`<small>${esc(it.d)}</small>`:""}${it.sid?`<span data-stk></span>`:""}</span><span class="ip">${brl(it.p)}</span><span class="plus" aria-hidden="true">+<i data-q="${id}" hidden></i></span></button>`}).join("")}</section>`}).join("")}</div>`;
   renderMesaTop();renderNaMesa();renderDraftBar();
 }
 function renderMesaTop(){const el=$("mTot");if(!el)return;const c=CONTAS[VIEW];el.innerHTML=`<small>${c?"Aberta "+ago(c.abertaEm):"Mesa livre"}</small>${brl(c?sumItens(c.itens):0)}`}
@@ -492,6 +573,7 @@ const STATUS={novo:"Na fila",preparo:"Fazendo",pronto:"Pronto",entregue:"Entregu
 function draftCount(){return DRAFT.reduce((a,d)=>a+d.q,0)}
 function renderDraftBar(){
   document.querySelectorAll("[data-q]").forEach(el=>{const q=DRAFT.filter(d=>d.id===el.dataset.q).reduce((a,d)=>a+d.q,0);el.hidden=!q;el.textContent=q});
+  renderStockMarks();
   const n=draftCount();
   $("dock").innerHTML=n?`<div class="dock"><button class="btn pri" type="button" data-review><span class="cnt">${n} ${n>1?"itens":"item"}</span><span>Revisar e enviar</span><span>${brl(sumItens(DRAFT))}</span></button></div>`:"";
 }
@@ -503,22 +585,26 @@ function linesFor(it,o){ // como cada item se divide entre os setores
 function addDraft(it,o,q){
   const extra=it.opt==="jantinha"?o.feijao+" · espeto de "+o.espeto.toLowerCase():it.opt==="espmand"?"espeto de "+o.espeto.toLowerCase():"";
   const k=it.id+"|"+extra;const ex=DRAFT.find(d=>d.k===k);
-  if(ex)ex.q+=q;else DRAFT.push({k,id:it.id,n:it.n,p:it.p,q,extra,obs:"",lines:linesFor(it,o)});
+  const sid=it.sid||(it.opt?SID[o.espeto]:null);
+  if(avail(sid)<q){const r=avail(sid);toast(r<=0?SNAME[sid]+" esgotado":"Só restam "+r+" de "+SNAME[sid],true);return false}
+  if(ex)ex.q+=q;else DRAFT.push({k,id:it.id,n:it.n,p:it.p,q,extra,obs:"",sid,lines:linesFor(it,o)});
   renderDraftBar();
 }
 /* folha de opções: jantinha e espeto + mandioca */
 let OPT=null;
 function openOpt(it){
-  OPT={it,feijao:"Feijão tropeiro",espeto:ESPETOS[0],q:1};
+  const first=ESPETOS.concat(ESPECIAIS).find(n=>avail(SID[n])>0);
+  if(!first){toast("Todos os espetos estão esgotados",true);return}
+  OPT={it,feijao:"Feijão tropeiro",espeto:first,q:1};
   const esp=ESPETOS.concat(ESPECIAIS);
   sheet(`<button class="x" type="button" data-close aria-label="Fechar">×</button><h3>${esc(it.n)}</h3><p class="note" style="margin:0">${brl(it.p)} · Mesa ${VIEW}</p>
   ${it.opt==="jantinha"?`<div class="fld"><span>Feijão (vai para a cozinha)</span><div class="seg" id="oFeijao">${["Feijão tropeiro","Feijão de caldo"].map((v,i)=>`<button type="button" aria-pressed="${!i}">${v}</button>`).join("")}</div></div>`:""}
-  <div class="fld"><span>${it.opt==="jantinha"?"Espeto incluso (vai para a churrasqueira)":"Qual espeto (vai para a churrasqueira)"}</span><div class="seg col" id="oEsp">${esp.map((v,i)=>`<button type="button" aria-pressed="${!i}">${esc(v)}</button>`).join("")}</div></div>
+  <div class="fld"><span>${it.opt==="jantinha"?"Espeto incluso (vai para a churrasqueira)":"Qual espeto (vai para a churrasqueira)"}</span><div class="seg col" id="oEsp">${esp.map(v=>{const k=SID[v],out=avail(k)<=0;return`<button type="button" data-v="${esc(v)}" aria-pressed="${v===first}"${out?" disabled":""}>${esc(v)}${tracked(k)?` <small style="float:right;font-weight:600">${out?"esgotado":"restam "+avail(k)}</small>`:""}</button>`}).join("")}</div></div>
   <div class="fld"><span>Quantidade</span><div class="step"><button class="qb" type="button" data-oq="-1" aria-label="Menos">−</button><b id="oQ">1</b><button class="qb" type="button" data-oq="1" aria-label="Mais">+</button></div></div>
   <button class="btn pri wide" type="button" id="oAdd" style="margin-top:16px">Adicionar ao pedido</button>`);
-  const seg=(id,f)=>{const el=$(id);if(!el)return;el.onclick=e=>{const b=e.target.closest("button");if(!b)return;el.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",x===b));f(b.textContent)}};
+  const seg=(id,f)=>{const el=$(id);if(!el)return;el.onclick=e=>{const b=e.target.closest("button");if(!b)return;el.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",x===b));f(b.dataset.v||b.textContent)}};
   seg("oFeijao",v=>OPT.feijao=v);seg("oEsp",v=>OPT.espeto=v);
-  $("oAdd").onclick=()=>{const o=OPT;addDraft(o.it,o,o.q);closeSheet();toast(o.q+"× "+o.it.n+" no pedido")};
+  $("oAdd").onclick=()=>{const o=OPT;if(addDraft(o.it,o,o.q)===false)return;closeSheet();toast(o.q+"× "+o.it.n+" no pedido")};
 }
 /* revisar o pedido antes de enviar */
 function openReview(){
@@ -538,11 +624,14 @@ let SENDING=false;
 async function enviar(){
   if(SENDING||!DRAFT.length)return;if(READONLY){toast("Seu acesso é só de leitura.",true);return}
   SENDING=true;const b=$("send");if(b){b.disabled=true;b.textContent="Enviando…"}
+  const need={};DRAFT.forEach(d=>{if(d.sid&&tracked(d.sid))need[d.sid]=(need[d.sid]||0)+d.q});
+  for(const k of Object.keys(need)){if(need[k]>Math.max(0,STOCK[k])){SENDING=false;if(b){b.disabled=false;b.textContent="Enviar pedido da Mesa "+VIEW}const r=Math.max(0,STOCK[k]);toast(r?"Só restam "+r+" de "+SNAME[k]+". Diminua a quantidade.":SNAME[k]+" acabou. Tire do pedido.",true);return}}
   const m=VIEW,now=Date.now(),c=CONTAS[m],abertaEm=c?c.abertaEm:now;
   const novos=DRAFT.map(d=>({n:d.n,p:d.p,q:d.q,extra:d.extra,obs:d.obs.trim(),t:now}));
   const porSetor={};DRAFT.forEach(d=>d.lines.forEach(l=>{(porSetor[l.setor]=porSetor[l.setor]||[]).push({q:d.q,n:l.n,extra:l.extra,obs:d.obs.trim()})}));
   try{
     await put("contas/m"+m,{mesa:m,abertaEm,itens:(c?c.itens:[]).concat(novos),pediuConta:false,atualizado:now});
+    if(Object.keys(need).length){const dec={};Object.keys(need).forEach(k=>dec[k]={inc:-need[k]});await stockWrite({qtd:dec})}
     for(const s of Object.keys(porSetor))await add("tickets",{mesa:m,conta:abertaEm,setor:s,itens:porSetor[s],status:ROLE==="atend"&&s==="bebidas"?"pronto":"novo",criado:now,atualizado:now});
     DRAFT=[];closeSheet();renderDraftBar();toast("Pedido da Mesa "+m+" enviado");
   }catch(e){writeErr(e);if(b){b.disabled=false;b.textContent="Tentar enviar de novo"}}
@@ -574,19 +663,20 @@ function renderCaixa(){
   if(CTAB==="contas")body=CMESA!==null?contaHTML(CMESA):(abertas.length?`<div class="acc">${abertas.map(c=>`<button class="ac" type="button" data-conta="${c.mesa}"><span class="num">${c.mesa}</span><span><b style="font:700 17px var(--cond);text-transform:uppercase">Mesa ${c.mesa}</b>${c.pediuConta?' <span class="flag bill" style="position:static">Pediu a conta</span>':""}<br><span class="note">Aberta às ${hhmm(c.abertaEm)} · ${agg(c.itens).reduce((a,i)=>a+i.q,0)} itens</span></span><span class="v">${brl(sumItens(c.itens))}</span></button>`).join("")}</div>`:`<div class="empty"><b>Nenhuma mesa aberta</b>Quando o garçom lançar um pedido, a conta da mesa aparece aqui.</div>`);
   if(CTAB==="bebidas")body=stationHTML("bebidas");
   if(CTAB==="dia")body=diaHTML();
+  if(CTAB==="estoque")body=estoqueHTML();
   if(CTAB==="ajustes")body=ajustesHTML();
-  $("app").innerHTML=`${modeBanner()}<nav class="tabs" aria-label="Seções do caixa">${[["contas","Contas",abertas.length],["bebidas","Bebidas",beb],["dia","Caixa do dia",0],["ajustes","Ajustes",0]].map(([k,n,c])=>`<button class="tab" type="button" data-tab="${k}" aria-pressed="${CTAB===k}">${n}${c?`<i>${c}</i>`:""}</button>`).join("")}</nav>${body}`;
+  $("app").innerHTML=`${modeBanner()}<nav class="tabs" aria-label="Seções do caixa">${[["contas","Contas",abertas.length],["bebidas","Bebidas",beb],["estoque","Estoque",STOCK_IDS.filter(k=>tracked(k)&&STOCK[k]<=3).length],["dia","Caixa do dia",0],["ajustes","Ajustes",0]].map(([k,n,c])=>`<button class="tab" type="button" data-tab="${k}" aria-pressed="${CTAB===k}">${n}${c?`<i>${c}</i>`:""}</button>`).join("")}</nav>${body}`;
 }
 function ajustesHTML(){return `<div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Número de mesas</b><p class="note" style="margin:4px 0 10px">Quantas mesas aparecem no celular do garçom.</p><div class="step"><button class="qb" type="button" data-mesas="-1" aria-label="Menos mesas">−</button><b id="nMesas">${CONFIG.mesas}</b><button class="qb" type="button" data-mesas="1" aria-label="Mais mesas">+</button></div></div>
     <div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Conectar outro celular</b><p class="note" style="margin:6px 0 10px">${S.mode==="fb"?"Mande este link para o funcionário. Ao abrir, o celular já entra no estabelecimento; depois ele escolhe a função.":"Configure o Firebase para conectar os celulares."}</p>${S.mode==="fb"?`<p class="note" style="margin:0 0 10px">Código: <b style="color:var(--ash)">${esc(CODE)}</b></p><button class="btn wide" type="button" data-copylink>Copiar link de acesso</button><button class="btn ghost wide" type="button" data-trocaloja style="margin-top:8px">Trocar de estabelecimento</button>`:""}</div>
     <div class="box"><b style="font:400 20px var(--display);text-transform:uppercase">Senha do dono</b><p class="note" style="margin:6px 0 10px">Ela protege o caixa do dia e a troca de função dos celulares. Quem não souber a senha só usa Garçom, Churrasqueira ou Cozinha.</p><button class="btn wide" type="button" data-trocasenha>Trocar senha do dono</button></div>`}
 function atendTabs(){const beb=TICKETS.filter(t=>t.setor==="bebidas"&&(t.status==="novo"||t.status==="preparo")).length,ab=Object.keys(CONTAS).length;
-  return`<nav class="tabs" aria-label="Seções">${[["mesas","Mesas",ab],["bebidas","Bebidas",beb],["dia","Caixa do dia",0],["ajustes","Ajustes",0]].map(([k,n,c])=>`<button class="tab" type="button" data-atab="${k}" aria-pressed="${ATAB===k}">${n}${c?`<i>${c}</i>`:""}</button>`).join("")}</nav>`}
+  return`<nav class="tabs" aria-label="Seções">${[["mesas","Mesas",ab],["bebidas","Bebidas",beb],["estoque","Estoque",STOCK_IDS.filter(k=>tracked(k)&&STOCK[k]<=3).length],["dia","Caixa do dia",0],["ajustes","Ajustes",0]].map(([k,n,c])=>`<button class="tab" type="button" data-atab="${k}" aria-pressed="${ATAB===k}">${n}${c?`<i>${c}</i>`:""}</button>`).join("")}</nav>`}
 function renderAtend(){
   if(CMESA!==null&&!CONTAS[CMESA])CMESA=null;
   if(CMESA!==null){$("app").innerHTML=modeBanner()+contaHTML(CMESA);return}
   if(ATAB==="mesas")return VIEW==="mesas"?renderMesas():renderMesa();
-  $("app").innerHTML=modeBanner()+atendTabs()+(ATAB==="bebidas"?stationHTML("bebidas"):ATAB==="dia"?diaHTML():ajustesHTML());
+  $("app").innerHTML=modeBanner()+atendTabs()+(ATAB==="bebidas"?stationHTML("bebidas"):ATAB==="dia"?diaHTML():ATAB==="estoque"?estoqueHTML():ajustesHTML());
 }
 function contaHTML(m){
   const c=CONTAS[m],p=pay(m),T=totals(m),its=agg(c.itens);
@@ -648,6 +738,10 @@ document.addEventListener("click",async e=>{
   if(d.reload!==undefined){location.reload();return}
   if(d.copylink!==undefined){const link=location.origin+location.pathname+"#loja="+CODE;try{await navigator.clipboard.writeText(link);toast("Link copiado. Mande no WhatsApp do funcionário.")}catch(err){toast(link)}return}
   if(d.trocaloja!==undefined){if(!t.dataset.sure){t.dataset.sure=1;t.textContent="Toque de novo para confirmar";return}ls("gbc_loja",null);location.reload();return}
+  if(d.skcount!==undefined){openContagem();return}
+  if(d.skarrive!==undefined){openChegou();return}
+  if(d.skedit){openAjuste(d.skedit);return}
+  if(d.sk){const k=d.sk,v=+d.v;if(v<0&&(!tracked(k)||STOCK[k]<=0))return;stockWrite({qtd:{[k]:tracked(k)?{inc:v}:Math.max(0,v)}});return}
   if(d.trocasenha!==undefined){trocarSenha();return}
   if(d.unlock!==undefined){const k=await pinSheet("Senha do dono","Digite a senha do dono.","check");if(k){setKey(k);render()}return}
   if(t.id==="roleBtn"){if(OWNER||!OWNER_OK){const k=await pinSheet("Trocar de função","Só o dono troca a função deste celular. Digite a senha do dono.","check");if(!k)return;UNLOCK=k}
@@ -661,7 +755,7 @@ document.addEventListener("click",async e=>{
   if(d.add){const it=ITEM[d.add];if(it.opt)openOpt(it);else{addDraft(it,{},1)}return}
   if(d.oq){if(OPT){OPT.q=Math.max(1,OPT.q+ +d.oq);$("oQ").textContent=OPT.q}return}
   if(d.review!==undefined){openReview();return}
-  if(d.dq!==undefined){const x=DRAFT[+d.dq];if(x){x.q+= +d.v;if(x.q<=0)DRAFT.splice(+d.dq,1)}renderDraftBar();openReview();return}
+  if(d.dq!==undefined){const x=DRAFT[+d.dq];if(x&& +d.v>0&&avail(x.sid)<1){toast(SNAME[x.sid]+": não tem mais no estoque",true);return}if(x){x.q+= +d.v;if(x.q<=0)DRAFT.splice(+d.dq,1)}renderDraftBar();openReview();return}
   if(d.pediu!==undefined){const c=CONTAS[VIEW];if(c)try{await patch("contas/m"+VIEW,{pediuConta:!c.pediuConta})}catch(err){writeErr(err)}return}
   if(d.levei){try{await patch("tickets/"+d.levei,{status:"entregue",atualizado:Date.now()})}catch(err){writeErr(err)}return}
   if(d.st){try{await patch("tickets/"+d.st,{status:d.v,atualizado:Date.now()})}catch(err){writeErr(err)}return}

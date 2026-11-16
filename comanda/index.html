@@ -213,7 +213,7 @@ input[type=text],input[type=number],input[inputmode]{width:100%;background:var(-
 <script>
 "use strict";
 /* ================= cardápio (mesmos itens e preços do cardápio digital) ================= */
-const ESPETOS=["Contra filé","Contra com bacon","Coração","Asinha de frango","Frango com bacon","Linguiça"];
+const ESPETOS=["Contra filé","Contra com bacon","Coração","Asinha de frango","Frango com bacon","Linguiça","Contra filé “2”"];
 const ESPECIAIS=["Cupim","Enroladinho de frango com bacon “Medalhão”","Cafta de carne com queijo","Picanha montada"];
 const SETOR={churrasqueira:"Churrasqueira",cozinha:"Cozinha",bebidas:"Bebidas"};
 const CAT=[
@@ -241,6 +241,8 @@ const CAT=[
 ];
 const ITEM={};CAT.forEach(c=>c.items.forEach(([id,n,p,o])=>{ITEM[id]=Object.assign({id,n,p,cat:c.id,setor:c.setor},o||{})}));
 CAT.filter(c=>c.id==="espetinhos"||c.id==="especiais").forEach(c=>c.items.forEach(([id])=>{ITEM[id].sid=id}));
+const QUEIJOS_ESTQ=["q1","q2"]; // Provolone e Queijo coalho também têm estoque
+QUEIJOS_ESTQ.forEach(id=>{ITEM[id].sid=id});
 
 /* ================= utilidades ================= */
 const $=id=>document.getElementById(id);
@@ -429,7 +431,7 @@ let PENDING=false;
    config/estoque guarda {qtd:{e0:50,...}, saco:{e0:10,...}}.
    Espeto sem número = sem controle (não bloqueia). Cada pedido enviado desconta sozinho. */
 let STOCK={},SACO={};
-const SID={};ESPETOS.forEach((n,i)=>SID[n]="e"+i);ESPECIAIS.forEach((n,i)=>SID[n]="s"+i);
+const SID={};ESPETOS.forEach((n,i)=>SID[n]="e"+i);ESPECIAIS.forEach((n,i)=>SID[n]="s"+i);QUEIJOS_ESTQ.forEach(id=>SID[ITEM[id].n]=id);
 const SNAME={};Object.keys(SID).forEach(n=>SNAME[SID[n]]=n);
 const STOCK_IDS=Object.values(SID);
 const tracked=k=>typeof STOCK[k]==="number";

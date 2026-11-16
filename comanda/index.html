@@ -248,6 +248,8 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 const brl=v=>"R$ "+(Math.round((+v||0)*100)/100).toFixed(2).replace(".",",");
 const sumItens=its=>(its||[]).reduce((a,i)=>a+i.p*i.q,0);
 const today=()=>{const d=new Date(),z=n=>String(n).padStart(2,"0");return d.getFullYear()+"-"+z(d.getMonth()+1)+"-"+z(d.getDate())};
+// dia de trabalho: até as 6h da manhã ainda conta como o dia anterior, porque o expediente passa da meia-noite
+const workday=()=>{const d=new Date(Date.now()-6*3600e3),z=n=>String(n).padStart(2,"0");return d.getFullYear()+"-"+z(d.getMonth()+1)+"-"+z(d.getDate())};
 const hhmm=t=>{const d=new Date(t),z=n=>String(n).padStart(2,"0");return z(d.getHours())+":"+z(d.getMinutes())};
 function ago(t){const m=Math.max(0,Math.floor((Date.now()-t)/60000));if(m<1)return"agora";if(m<60)return"há "+m+" min";return"há "+Math.floor(m/60)+"h"+String(m%60).padStart(2,"0")}
 const mins=t=>(Date.now()-t)/60000;
@@ -305,6 +307,16 @@ function fire(p){p.catch(writeErr);return Promise.resolve()}
 async function put(path,data){if(S.mode==="fb")return fire(S.fs.doc(FP(path)).set(data));const[c,id]=splitPath(path);(LOCAL.data[c]=LOCAL.data[c]||{})[id]=JSON.parse(JSON.stringify(data));localEmit()}
 async function patch(path,data){if(S.mode==="fb")return fire(S.fs.doc(FP(path)).update(data));const[c,id]=splitPath(path);const m=LOCAL.data[c]||{};if(!m[id])throw{code:"not-found"};Object.assign(m[id],JSON.parse(JSON.stringify(data)));localEmit()}
 async function del(path){if(S.mode==="fb")return fire(S.fs.doc(FP(path)).delete());const[c,id]=splitPath(path);if(LOCAL.data[c])delete LOCAL.data[c][id];localEmit()}
+// itens da conta: soma e troca item a item, sem regravar a conta inteira (dois celulares podem lançar na mesma mesa)
+async function contaAppend(m,base,itens){const path="contas/m"+m;
+  if(S.mode==="fb"){const FV=firebase.firestore.FieldValue;return fire(S.fs.doc(FP(path)).set(Object.assign({},base,{itens:FV.arrayUnion(...itens)}),{merge:true}))}
+  const c=(LOCAL.data.contas=LOCAL.data.contas||{}),d=c["m"+m];
+  if(d){Object.assign(d,base,{abertaEm:d.abertaEm});d.itens=(d.itens||[]).concat(JSON.parse(JSON.stringify(itens)))}else c["m"+m]=Object.assign({},base,{itens:JSON.parse(JSON.stringify(itens))});localEmit()}
+async function contaReplace(m,oldItem,newItem){const path="contas/m"+m;
+  if(S.mode==="fb"){const FV=firebase.firestore.FieldValue,ref=S.fs.doc(FP(path)),b=S.fs.batch();b.update(ref,{itens:FV.arrayRemove(oldItem),atualizado:Date.now()});if(newItem)b.update(ref,{itens:FV.arrayUnion(newItem)});return fire(b.commit())}
+  const d=(LOCAL.data.contas||{})["m"+m];if(!d)throw{code:"not-found"};const j=d.itens.findIndex(x=>JSON.stringify(x)===JSON.stringify(oldItem));if(j<0)return;
+  if(newItem)d.itens.splice(j,1,JSON.parse(JSON.stringify(newItem)));else d.itens.splice(j,1);d.atualizado=Date.now();localEmit()}
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 async function add(col,data){if(S.mode==="fb")return fire(S.fs.collection(FP(col)).add(data));const id=Date.now().toString(36)+Math.random().toString(36).slice(2,7);(LOCAL.data[col]=LOCAL.data[col]||{})[id]=JSON.parse(JSON.stringify(data));localEmit()}
 let READONLY=false;
 function writeErr(e){
@@ -342,7 +354,7 @@ function setSync(){const s=$("sync");if(!s)return;s.className="sync "+(DBDEAD||S
 let AC=null;
 function audioOn(){try{AC=AC||new (window.AudioContext||window.webkitAudioContext)();if(AC.state==="suspended")AC.resume()}catch(e){}}
 function beep(n){try{if(!AC)return;const t0=AC.currentTime;for(let i=0;i<(n||2);i++){const o=AC.createOscillator(),g=AC.createGain();o.type="square";o.frequency.value=i%2?1320:990;g.gain.setValueAtTime(.0001,t0+i*.22);g.gain.exponentialRampToValueAtTime(.25,t0+i*.22+.02);g.gain.exponentialRampToValueAtTime(.0001,t0+i*.22+.18);o.connect(g).connect(AC.destination);o.start(t0+i*.22);o.stop(t0+i*.22+.2)}}catch(e){}try{navigator.vibrate&&navigator.vibrate([180,80,180])}catch(e){}}
-document.addEventListener("pointerdown",audioOn,{passive:true});
+document.addEventListener("pointerdown",()=>{const had=AC&&AC.state==="running";audioOn();if(!had)setTimeout(()=>{if(AC&&AC.state==="running")document.querySelectorAll("[data-som]").forEach(b=>b.closest(".banner").remove())},250)},{passive:true});
 let WL=null;async function keepAwake(){try{if(navigator.wakeLock&&document.visibilityState==="visible"&&(ROLE==="churrasqueira"||ROLE==="cozinha"||ROLE==="caixa"||ROLE==="atend"))WL=await navigator.wakeLock.request("screen")}catch(e){}}
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")keepAwake()});
 
@@ -485,7 +497,8 @@ let KEY=ls("gbc_k")||"";
 let UNLOCK=null;            // chave aberta agora há pouco, para trocar de função sem pedir a senha duas vezes
 let FECH_UN=null;
 const isCaixaRole=r=>r==="caixa"||r==="atend";
-function startFech(){if(FECH_UN||!KEY)return;FECH_UN=watch("cx_"+KEY,docs=>{FECH=docs.sort((a,b)=>b.fechadoEm-a.fechadoEm);refresh()},["dia",today()])}
+let FECH_DAY="";
+function startFech(){if(FECH_UN||!KEY)return;FECH_DAY=workday();FECH_UN=watch("cx_"+KEY,docs=>{FECH=docs.sort((a,b)=>b.fechadoEm-a.fechadoEm);refresh()},["dia",FECH_DAY])}
 function stopFech(){if(FECH_UN)FECH_UN();FECH_UN=null;FECH=[]}
 function setKey(k){KEY=k||"";ls("gbc_k",KEY||null);if(KEY)startFech();else stopFech()}
 const b64=u=>btoa(String.fromCharCode(...new Uint8Array(u)));
@@ -525,9 +538,13 @@ function pinSheet(title,msg,mode){
 async function trocarSenha(){const k=await pinSheet("Trocar senha do dono","Digite a senha atual.","check");if(!k)return;setKey(k);await pinSheet("Nova senha do dono","","new")}
 document.addEventListener("focusout",()=>{if(PENDING){PENDING=false;setTimeout(refresh,50)}});
 
+function soundBanner(){
+  if(!ROLE)return"";if(AC&&AC.state==="running")return"";
+  return`<div class="banner" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-color:#ffb02e88;background:#ffb02e14"><span style="flex:1 1 200px">O som dos avisos está desligado neste celular. Toque no botão para ligar.</span><button class="btn pri" type="button" data-som style="min-height:40px;padding:8px 14px;font-size:14px">Ligar som</button></div>`;
+}
 function modeBanner(){
-  if(S.mode==="local")return'<p class="banner">Modo teste: o Firebase ainda não foi configurado, então os pedidos ficam só neste aparelho.</p>'+notifBanner();
-  return notifBanner();
+  if(S.mode==="local")return'<p class="banner">Modo teste: o Firebase ainda não foi configurado, então os pedidos ficam só neste aparelho.</p>'+soundBanner()+notifBanner();
+  return soundBanner()+notifBanner();
 }
 function renderCode(){
   $("app").innerHTML=`<h2 class="sec">Código do estabelecimento</h2>
@@ -646,10 +663,10 @@ async function enviar(){
   const need={};DRAFT.forEach(d=>{if(d.sid&&tracked(d.sid))need[d.sid]=(need[d.sid]||0)+d.q});
   for(const k of Object.keys(need)){if(need[k]>Math.max(0,STOCK[k])){SENDING=false;if(b){b.disabled=false;b.textContent="Enviar pedido da Mesa "+VIEW}const r=Math.max(0,STOCK[k]);toast(r?"Só restam "+r+" de "+SNAME[k]+". Diminua a quantidade.":SNAME[k]+" acabou. Tire do pedido.",true);return}}
   const m=VIEW,now=Date.now(),c=CONTAS[m],abertaEm=c?c.abertaEm:now;
-  const novos=DRAFT.map(d=>({n:d.n,p:d.p,q:d.q,extra:d.extra,obs:d.obs.trim(),t:now}));
+  const novos=DRAFT.map(d=>({n:d.n,p:d.p,q:d.q,extra:d.extra,obs:d.obs.trim(),t:now,u:uid()}));
   const porSetor={};DRAFT.forEach(d=>d.lines.forEach(l=>{(porSetor[l.setor]=porSetor[l.setor]||[]).push({q:d.q,n:l.n,extra:l.extra,obs:d.obs.trim()})}));
   try{
-    await put("contas/m"+m,{mesa:m,abertaEm,itens:(c?c.itens:[]).concat(novos),pediuConta:false,atualizado:now});
+    await contaAppend(m,{mesa:m,abertaEm,pediuConta:false,atualizado:now},novos);
     if(Object.keys(need).length){const dec={};Object.keys(need).forEach(k=>dec[k]={inc:-need[k]});await stockWrite({qtd:dec})}
     for(const s of Object.keys(porSetor))await add("tickets",{mesa:m,conta:abertaEm,setor:s,itens:porSetor[s],status:ROLE==="atend"&&s==="bebidas"?"pronto":"novo",criado:now,atualizado:now});
     DRAFT=[];closeSheet();renderDraftBar();toast("Pedido da Mesa "+m+" enviado");
@@ -727,7 +744,7 @@ async function fecharConta(m){
   const c=CONTAS[m],p=pay(m),T=totals(m),now=Date.now();
   try{
     if(!KEY){toast("Abra o caixa com a senha do dono para fechar contas.",true);CLOSING=false;return}
-    if(c.itens&&c.itens.length)await add("cx_"+KEY,{mesa:m,itens:agg(c.itens).map(i=>({n:i.n,extra:i.extra,p:i.p,q:i.q})),subtotal:T.sub,servico:T.serv,total:T.tot,pagamento:p.forma,pessoas:p.pessoas,abertaEm:c.abertaEm,fechadoEm:now,dia:today()});
+    if(c.itens&&c.itens.length)await add("cx_"+KEY,{mesa:m,itens:agg(c.itens).map(i=>({n:i.n,extra:i.extra,p:i.p,q:i.q})),subtotal:T.sub,servico:T.serv,total:T.tot,pagamento:p.forma,pessoas:p.pessoas,abertaEm:c.abertaEm,fechadoEm:now,dia:workday()});
     for(const t of TICKETS.filter(t=>t.mesa===m&&t.conta===c.abertaEm))await del("tickets/"+t._id);
     await del("contas/m"+m);
     delete PAY[m];CMESA=null;if(ROLE==="atend")VIEW="mesas";toast("Mesa "+m+" fechada · "+brl(T.tot));
@@ -735,10 +752,11 @@ async function fecharConta(m){
   CLOSING=false;render();
 }
 async function tirarItem(m,k){
-  const c=CONTAS[m];if(!c)return;const itens=c.itens.map(i=>Object.assign({},i));
-  for(let j=itens.length-1;j>=0;j--){const i=itens[j];if(i.n+"|"+(i.extra||"")+"|"+i.p===k){i.q--;if(i.q<=0)itens.splice(j,1);break}}
-  const{_id,...doc}=c;
-  try{await put("contas/m"+m,Object.assign(doc,{itens,atualizado:Date.now()}))}catch(e){writeErr(e)}
+  const c=CONTAS[m];if(!c||!c.itens)return;let old=null;
+  for(let j=c.itens.length-1;j>=0;j--){const i=c.itens[j];if(i.n+"|"+(i.extra||"")+"|"+i.p===k){old=i;break}}
+  if(!old)return;
+  const nu=old.q>1?Object.assign({},old,{q:old.q-1,u:uid()}):null;
+  try{await contaReplace(m,old,nu)}catch(e){writeErr(e)}
 }
 
 /* ================= folha (sheet) ================= */
@@ -757,6 +775,7 @@ document.addEventListener("click",async e=>{
   if(d.reload!==undefined){location.reload();return}
   if(d.copylink!==undefined){const link=location.origin+location.pathname+"#loja="+CODE;try{await navigator.clipboard.writeText(link);toast("Link copiado. Mande no WhatsApp do funcionário.")}catch(err){toast(link)}return}
   if(d.trocaloja!==undefined){if(!t.dataset.sure){t.dataset.sure=1;t.textContent="Toque de novo para confirmar";return}ls("gbc_loja",null);location.reload();return}
+  if(d.som!==undefined){audioOn();setTimeout(()=>{beep(2);document.querySelectorAll("[data-som]").forEach(x=>x.closest(".banner").remove())},150);return}
   if(d.notif!==undefined){audioOn();try{const r=await Notification.requestPermission();if(r==="granted"){beep(2);notify("Avisos ligados","Os pedidos vão chegar assim neste celular.","teste")}}catch(err){}render();return}
   if(d.skcount!==undefined){openContagem();return}
   if(d.skarrive!==undefined){openChegou();return}
@@ -792,6 +811,7 @@ document.addEventListener("click",async e=>{
 let MT;
 
 /* relógio: atualiza os "há X min" sem gravar nada */
+setInterval(()=>{if(FECH_UN&&FECH_DAY!==workday()){stopFech();startFech()}},60000);
 setInterval(()=>{const g=ROLE==="garcom"||(ROLE==="atend"&&ATAB==="mesas"&&CMESA===null);if(ROLE&&S.mode&&!(g&&VIEW!=="mesas"))refresh();else if(g)renderMesaTop()},30000);
 
 (async()=>{

@@ -709,7 +709,10 @@ function PCFG(){let c={};try{c=JSON.parse(ls(PCFG_KEY)||"{}")||{}}catch(e){}
 function setPCFG(p){ls(PCFG_KEY,JSON.stringify(Object.assign(PCFG(),p)));prnUI()}
 /* Bluetooth direto (Web Bluetooth): impressoras térmicas com Bluetooth BLE */
 const BT_SVCS=[0x18f0,0xff00,0xffe0,0xfee7,0xfff0,0xae30,0xae00,0xffb0,"e7810a71-73ae-499d-8c15-faa9aef0c3f2","49535343-fe7d-4ae5-8fa9-9fafd205e455","0000ff00-0000-1000-8000-00805f9b34fb"];
-const BT={dev:null,ch:null,chunk:100,q:Promise.resolve(),tries:0,off:false,state:""};
+const BT={dev:null,ch:null,chunk:100,q:Promise.resolve(),tries:0,off:false,state:"",pend:[]};
+function btFlush(){if(!BT.ch||!BT.pend.length)return;const j=BT.pend.splice(0);j.forEach(b=>btSend(b));toast(j.length>1?j.length+" pedidos impressos":"Pedido impresso")}
+function btRe(){if(!BT.dev||BT.ch||BT.off||BT.state==="conectando")return Promise.resolve(!!BT.ch);return btConnect(BT.dev).then(()=>true,()=>false)}
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&BT.dev&&!BT.ch&&!BT.off){BT.tries=0;btRe()}});
 const btOk=()=>!!(navigator.bluetooth&&navigator.bluetooth.requestDevice);
 async function btConnect(dev){
   BT.state="conectando";prnUI();
@@ -721,10 +724,10 @@ async function btConnect(dev){
     if(!ch){try{dev.gatt.disconnect()}catch(e){}throw new Error("semcanal")}
     BT.dev=dev;BT.ch=ch;BT.tries=0;BT.off=false;BT.state="";
     if(!dev.__gb){dev.__gb=1;dev.addEventListener("gattserverdisconnected",btLost)}
-    setPCFG({nome:dev.name||"Impressora",id:dev.id});
+    setPCFG({nome:dev.name||"Impressora",id:dev.id});btFlush();
   }catch(e){BT.state="";prnUI();throw e}
 }
-function btLost(){BT.ch=null;prnUI();if(BT.off||!BT.dev)return;
+function btLost(){BT.ch=null;prnUI();if(BT.off||!BT.dev||document.visibilityState!=="visible")return;
   if(BT.tries<6){BT.tries++;setTimeout(()=>{if(!BT.ch&&!BT.off)btConnect(BT.dev).catch(()=>{})},1500*BT.tries)}}
 async function btPick(){
   const dev=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:BT_SVCS});
@@ -752,7 +755,9 @@ function doPrint(bytes,auto){
   let all=[];for(let k=0;k<c.copias;k++)all=all.concat(bytes);
   if(c.modo==="bt"&&btOk()){
     if(BT.ch){btSend(all);if(!auto)toast("Imprimindo…");return}
-    if(auto){toast("Impressora desconectada. Toque no botão da impressora, lá em cima.",true);return}
+    if(BT.dev&&!BT.off){if(!auto)toast("Reconectando a impressora…");
+      btRe().then(ok=>{if(ok){if(!BT.pend.includes(all))btSend(all)}else{if(auto&&BT.pend.length<20)BT.pend.push(all);toast("Impressora desconectada. Ligue a impressora"+(auto?"; o pedido sai quando ela conectar.":" e toque de novo."),true)}});return}
+    if(auto){if(BT.pend.length<20)BT.pend.push(all);toast("Impressora desconectada. Toque no botão da impressora, lá em cima, para conectar.",true);return}
     btPick().then(()=>{btSend(all);toast("Imprimindo…")}).catch(e=>{if(e&&e.name==="NotFoundError")return;toast("Não conectou. Ligue a impressora e tente de novo.",true)});
     return;
   }

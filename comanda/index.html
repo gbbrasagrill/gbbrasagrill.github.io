@@ -37,6 +37,9 @@ header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;backgroun
 header.top .wrap{display:flex;align-items:center;gap:10px;min-height:56px;padding-block:6px}
 .brand{font:400 22px/1 var(--display);letter-spacing:.02em;text-transform:uppercase;white-space:nowrap}
 .brand span{color:var(--ember)}
+.prnbtn{position:relative;padding:6px 10px!important;margin-right:8px}.prnbtn+.rolebtn{margin-left:0}
+.pdot{position:absolute;top:4px;right:4px;width:9px;height:9px;border-radius:50%}
+.noprn [data-printt],.noprn [data-printenv],.noprn [data-printconta]{display:none!important}
 .rolebtn{margin-left:auto;display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--coal3);border-radius:99px;padding:6px 12px;font:700 15px var(--cond);letter-spacing:.06em;text-transform:uppercase;min-height:40px}
 .sync{width:10px;height:10px;border-radius:50%;background:var(--ash3);flex:none}
 .sync.on{background:var(--ok)}.sync.wait{background:var(--warn)}.sync.local{background:var(--sky)}
@@ -198,6 +201,7 @@ input[type=text],input[type=number],input[inputmode]{width:100%;background:var(-
 </head><body>
 <header class="top"><div class="wrap">
   <div class="brand">GB Brasa <span>Comanda</span></div>
+  <button class="rolebtn prnbtn" type="button" id="prnBtn" hidden aria-label="Impressora"></button>
   <button class="rolebtn" type="button" id="roleBtn" hidden><span class="sync" id="sync"></span><span id="roleName"></span></button>
 </div></header>
 <main class="wrap" id="app" aria-live="polite">
@@ -379,6 +383,7 @@ function alerts(meta){
   const novos=TICKETS.filter(t=>!SEEN.has(t._id)&&t.status==="novo"&&mine(t));
   novos.forEach(t=>{NEWIDS.add(t._id);setTimeout(()=>NEWIDS.delete(t._id),4000)});
   TICKETS.forEach(t=>SEEN.add(t._id));
+  {const pc=PCFG();if(pc.on&&pc.auto&&pc.modo==="bt"&&ROLE!=="garcom"&&ROLE!=="atend")novos.forEach(t=>printTicket(t,true))}
   if(novos.length&&ROLE!=="garcom"){beep(4);
     const pm={};novos.forEach(t=>(pm[t.mesa]=pm[t.mesa]||[]).push(t));
     Object.keys(pm).forEach(m=>notify("Novo pedido · Mesa "+m,pm[m].map(t=>(ROLE==="caixa"?SETOR[t.setor]+": ":"")+t.itens.map(i=>i.q+"× "+i.n+(i.extra?" ("+i.extra+")":"")+(i.obs?" · "+i.obs:"")).join(", ")).join("\n"),"novo-"+m))}
@@ -405,10 +410,10 @@ const NEWIDS=new Set();
 /* ================= desenho das telas ================= */
 function render(){
   setSync();
-  $("roleBtn").hidden=!ROLE;$("roleName").textContent=ROLE?ROLES[ROLE].n:"";
+  $("roleBtn").hidden=!ROLE;$("prnBtn").hidden=!ROLE;$("roleName").textContent=ROLE?ROLES[ROLE].n:"";
   $("dock").innerHTML="";
   if(S.mode==="fail")return renderFail();
-  if(S.mode==="fb"&&!CODE){$("roleBtn").hidden=true;return renderCode()}
+  if(S.mode==="fb"&&!CODE){$("roleBtn").hidden=true;$("prnBtn").hidden=true;return renderCode()}
   if(!ROLE)return renderRoles();
   if(ROLE==="garcom")return VIEW==="mesas"?renderMesas():renderMesa();
   if(isCaixaRole(ROLE)&&!KEY)return renderLocked();
@@ -673,6 +678,7 @@ async function enviar(){
     if(Object.keys(need).length){const dec={};Object.keys(need).forEach(k=>dec[k]={inc:-need[k]});await stockWrite({qtd:dec})}
     for(const s of Object.keys(porSetor))await add("tickets",{mesa:m,conta:abertaEm,setor:s,itens:porSetor[s],status:ROLE==="atend"&&s==="bebidas"?"pronto":"novo",criado:now,atualizado:now});
     DRAFT=[];closeSheet();renderDraftBar();toast("Pedido da Mesa "+m+" enviado");
+    {const pc=PCFG();if(pc.on&&pc.auto&&pc.modo==="bt")printEnvio(m,now,Object.keys(porSetor).map(s=>({setor:s,itens:porSetor[s]})),true,novos)}
   }catch(e){writeErr(e);if(b){b.disabled=false;b.textContent="Tentar enviar de novo"}}
   SENDING=false;
 }
@@ -680,11 +686,11 @@ async function enviar(){
 /* ---------- churrasqueira, cozinha (e bebidas no caixa) ---------- */
 const PRINT_KEY="gbc_print",PRINT_NOME=()=>"GB Brasa Grill",PRINT_FORMA=()=>true;
 /* ================= impressão (impressora térmica Bluetooth de 58 mm, pelo app RawBT) ================= */
-const PCOLS=32;
+let PCOLS=32;
 const pstrip=s=>String(s??"").replace(/·/g,"-").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[×]/g,"x").replace(/[^\x20-\x7E\n]/g,"");
 function pwrap(s,w,ind){s=pstrip(s);ind=ind||"";const out=[];let line="";for(const word of s.split(/\s+/)){if(!word)continue;const cand=line?line+" "+word:word;if((out.length?ind.length:0)+cand.length<=w)line=cand;else{if(line)out.push(line);line=word.length>w?word.slice(0,w):word}}if(line)out.push(line);return out.map((l,i)=>(i?ind:"")+l)}
 function pline(l,r){l=pstrip(l);r=pstrip(r);const sp=PCOLS-l.length-r.length;if(sp>=1)return l+" ".repeat(sp)+r;return pwrap(l,PCOLS).join("\n")+"\n"+" ".repeat(Math.max(0,PCOLS-r.length))+r}
-function EB(){const b=[0x1B,0x40];const o={
+function EB(){PCOLS=PCFG().larg===80?48:32;const b=[0x1B,0x40];const o={
   txt(s){for(const ch of pstrip(s))b.push(ch.charCodeAt(0)&0x7F);return o},
   ln(s){return o.txt(s==null?"":s).nl()},nl(n){for(let i=0;i<(n||1);i++)b.push(10);return o},
   center(on){b.push(0x1B,0x61,on?1:0);return o},bold(on){b.push(0x1B,0x45,on?1:0);return o},
@@ -696,7 +702,64 @@ function sendPrint(bytes){
   let s="";for(let i=0;i<bytes.length;i++)s+=String.fromCharCode(bytes[i]);
   location.href="intent:base64,"+btoa(s)+"#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;";
 }
-function doPrint(bytes){
+/* configuração da impressora deste celular */
+const PCFG_KEY=PRINT_KEY+"_cfg";
+function PCFG(){let c={};try{c=JSON.parse(ls(PCFG_KEY)||"{}")||{}}catch(e){}
+  return{on:c.on!==false,modo:c.modo||(navigator.bluetooth?"bt":"rawbt"),auto:!!c.auto,larg:c.larg===80?80:58,copias:Math.max(1,Math.min(5,c.copias||1)),nome:c.nome||"",id:c.id||""}}
+function setPCFG(p){ls(PCFG_KEY,JSON.stringify(Object.assign(PCFG(),p)));prnUI()}
+/* Bluetooth direto (Web Bluetooth): impressoras térmicas com Bluetooth BLE */
+const BT_SVCS=[0x18f0,0xff00,0xffe0,0xfee7,0xfff0,0xae30,0xae00,0xffb0,"e7810a71-73ae-499d-8c15-faa9aef0c3f2","49535343-fe7d-4ae5-8fa9-9fafd205e455","0000ff00-0000-1000-8000-00805f9b34fb"];
+const BT={dev:null,ch:null,chunk:100,q:Promise.resolve(),tries:0,off:false,state:""};
+const btOk=()=>!!(navigator.bluetooth&&navigator.bluetooth.requestDevice);
+async function btConnect(dev){
+  BT.state="conectando";prnUI();
+  try{
+    const srv=await dev.gatt.connect();let ch=null;
+    const svcs=await srv.getPrimaryServices();
+    for(const sv of svcs){let cs=[];try{cs=await sv.getCharacteristics()}catch(e){}
+      ch=cs.find(c=>c.properties.writeWithoutResponse)||cs.find(c=>c.properties.write);if(ch)break}
+    if(!ch){try{dev.gatt.disconnect()}catch(e){}throw new Error("semcanal")}
+    BT.dev=dev;BT.ch=ch;BT.tries=0;BT.off=false;BT.state="";
+    if(!dev.__gb){dev.__gb=1;dev.addEventListener("gattserverdisconnected",btLost)}
+    setPCFG({nome:dev.name||"Impressora",id:dev.id});
+  }catch(e){BT.state="";prnUI();throw e}
+}
+function btLost(){BT.ch=null;prnUI();if(BT.off||!BT.dev)return;
+  if(BT.tries<6){BT.tries++;setTimeout(()=>{if(!BT.ch&&!BT.off)btConnect(BT.dev).catch(()=>{})},1500*BT.tries)}}
+async function btPick(){
+  const dev=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:BT_SVCS});
+  await btConnect(dev);
+}
+async function btAuto(){
+  const c=PCFG();if(c.modo!=="bt"||!c.on||!c.id||!navigator.bluetooth||!navigator.bluetooth.getDevices)return;
+  try{const ds=await navigator.bluetooth.getDevices();const d=ds.find(x=>x.id===c.id);if(d)await btConnect(d)}catch(e){}
+}
+async function btWriteAll(u){
+  const ch=BT.ch;if(!ch)throw new Error("desconectada");
+  const wr=x=>ch.properties.writeWithoutResponse&&ch.writeValueWithoutResponse?ch.writeValueWithoutResponse(x):ch.writeValueWithResponse?ch.writeValueWithResponse(x):ch.writeValue(x);
+  for(let o=0;o<u.length;o+=BT.chunk){await wr(u.slice(o,o+BT.chunk));if(ch.properties.writeWithoutResponse)await new Promise(r=>setTimeout(r,25))}
+}
+function btSend(bytes){
+  const u=new Uint8Array(bytes);
+  BT.q=BT.q.then(async()=>{
+    try{await btWriteAll(u)}
+    catch(e){if(BT.ch&&BT.chunk>20){BT.chunk=20;await btWriteAll(u)}else throw e}
+  }).catch(()=>toast("Não consegui imprimir. Confira se a impressora está ligada.",true));
+  return BT.q;
+}
+function doPrint(bytes,auto){
+  const c=PCFG();if(!c.on)return;
+  let all=[];for(let k=0;k<c.copias;k++)all=all.concat(bytes);
+  if(c.modo==="bt"&&btOk()){
+    if(BT.ch){btSend(all);if(!auto)toast("Imprimindo…");return}
+    if(auto){toast("Impressora desconectada. Toque no botão da impressora, lá em cima.",true);return}
+    btPick().then(()=>{btSend(all);toast("Imprimindo…")}).catch(e=>{if(e&&e.name==="NotFoundError")return;toast("Não conectou. Ligue a impressora e tente de novo.",true)});
+    return;
+  }
+  if(auto)return;
+  rawbtPrint(all);
+}
+function rawbtPrint(bytes){
   if(!/Android/i.test(navigator.userAgent)){toast("A impressão funciona no celular Android, com o app RawBT.",true);return}
   if(ls(PRINT_KEY)!=="1"){PRINT_PEND=bytes;sheet(`<button class="x" type="button" data-close aria-label="Fechar">×</button><h3>Configurar a impressora</h3>
   <p class="note" style="margin:0 0 10px">Só na primeira vez, neste celular:</p>
@@ -708,12 +771,72 @@ function doPrint(bytes){
   <button class="btn pri wide" type="button" data-printgo style="margin-top:16px">Já configurei, imprimir</button>`);return}
   sendPrint(bytes);
 }
-function printTicket(t){
+function printTeste(){
+  const c=PCFG(),e=EB().center(1).bold(1).big(1).ln("TESTE").big(0).ln(PRINT_NOME()).bold(0).ln(pdata()).center(0).sep()
+    .ln("Impressora funcionando!").ln("Papel de "+c.larg+" mm").ln("1234567890".repeat(5).slice(0,PCOLS)).sep().feed(3);
+  doPrint(e.bytes());
+}
+const PRN_ICO='<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
+function prnUI(){
+  const c=PCFG(),b=$("prnBtn");document.body.classList.toggle("noprn",!c.on);
+  if(b){b.innerHTML=PRN_ICO+`<span class="pdot" style="background:${!c.on?"var(--coal4)":c.modo==="bt"?(BT.ch?"var(--ok)":"var(--bad)"):"var(--gold)"}"></span>`}
+  if(!$("sheet").hidden&&$("prnSheet"))prnSheet();
+}
+function autoNote(){
+  if(ROLE==="garcom"||ROLE==="atend")return"O pedido sai na impressora assim que você toca em Enviar.";
+  if(ROLE==="caixa")return"Cada pedido novo de qualquer setor sai na impressora assim que chega.";
+  return"Cada pedido novo da "+(SETOR[ROLE]||"sua área")+" sai na impressora assim que chega.";
+}
+function prnSheet(){
+  const c=PCFG(),bt=c.modo==="bt";
+  const st=!btOk()?`<span style="color:var(--bad)">Este celular não permite conexão direta. Use o app RawBT.</span>`
+    :BT.ch?`<span style="color:var(--ok)">Conectada: ${esc(BT.dev&&BT.dev.name||c.nome||"Impressora")}</span>`
+    :BT.state==="conectando"?"Conectando…":`<span style="color:var(--bad)">Não conectada</span>`;
+  sheet(`<div id="prnSheet"><button class="x" type="button" data-close aria-label="Fechar">×</button><h3>Impressora</h3>
+  <div style="display:grid;gap:12px">
+  <button class="tgl" type="button" data-prn="on" aria-pressed="${c.on}"><span>Impressora</span><span class="sw"></span></button>
+  ${c.on?`
+  <div class="box" style="margin:0"><b style="font:700 17px var(--cond);letter-spacing:.04em;text-transform:uppercase">Método de impressão</b>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+      <button class="btn ${bt?"pri":"ghost"}" type="button" data-prn="bt" style="min-height:44px">Bluetooth direto</button>
+      <button class="btn ${bt?"ghost":"pri"}" type="button" data-prn="rawbt" style="min-height:44px">App RawBT</button></div>
+    <p class="note" style="margin:8px 0 0">${bt?"Imprime direto da comanda, sem outro app. Funciona com impressora que tenha Bluetooth BLE. Se ela não aparecer na lista, use o RawBT.":"Precisa do app RawBT instalado e configurado com a impressora. Não imprime automático."}</p></div>
+  ${bt?`<div class="box" style="margin:0"><b style="font:700 17px var(--cond);letter-spacing:.04em;text-transform:uppercase">Impressora Bluetooth</b>
+    <p style="margin:6px 0 10px;font-size:16px">${st}</p>
+    ${btOk()?(BT.ch?`<button class="btn ghost wide" type="button" data-prn="disc" style="min-height:44px">Desconectar</button>`:`<button class="btn pri wide" type="button" data-prn="conn" style="min-height:48px">${c.id?"Conectar de novo":"Conectar impressora"}</button>`):""}
+    <p class="note" style="margin:8px 0 0">Ligue a impressora antes. Na lista, escolha o nome dela.</p></div>
+  <div><button class="tgl" type="button" data-prn="auto" aria-pressed="${c.auto}"><span>Imprimir pedido automaticamente</span><span class="sw"></span></button>
+    <p class="note" style="margin:6px 2px 0">${autoNote()} A impressora precisa estar conectada.</p></div>`:""}
+  <div class="box" style="margin:0"><b style="font:700 17px var(--cond);letter-spacing:.04em;text-transform:uppercase">Largura do papel</b>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+      <button class="btn ${c.larg===58?"pri":"ghost"}" type="button" data-prn="w58" style="min-height:44px">58 mm</button>
+      <button class="btn ${c.larg===80?"pri":"ghost"}" type="button" data-prn="w80" style="min-height:44px">80 mm</button></div></div>
+  <div class="box" style="margin:0;display:flex;align-items:center;gap:10px"><b style="flex:1;font:700 17px var(--cond);letter-spacing:.04em;text-transform:uppercase">Número de cópias</b>
+    <button class="btn ghost" type="button" data-prn="cop-" style="min-height:44px;width:48px;padding:0">−</button><b style="font:400 26px var(--display);min-width:24px;text-align:center">${c.copias}</b><button class="btn ghost" type="button" data-prn="cop+" style="min-height:44px;width:48px;padding:0">+</button></div>
+  <button class="btn ok wide" type="button" data-prn="test" style="min-height:52px">Imprimir recibo de teste</button>`:`<p class="note" style="margin:0">Com a impressora desligada, os botões de imprimir somem da comanda neste celular.</p>`}
+  </div></div>`);
+}
+async function prnAction(a){
+  const c=PCFG();
+  if(a==="on")setPCFG({on:!c.on});
+  else if(a==="bt"||a==="rawbt")setPCFG({modo:a});
+  else if(a==="auto")setPCFG({auto:!c.auto});
+  else if(a==="w58")setPCFG({larg:58});else if(a==="w80")setPCFG({larg:80});
+  else if(a==="cop+")setPCFG({copias:c.copias+1});else if(a==="cop-")setPCFG({copias:c.copias-1});
+  else if(a==="test"){printTeste();return}
+  else if(a==="disc"){BT.off=true;try{BT.dev&&BT.dev.gatt.disconnect()}catch(e){}BT.ch=null;prnUI();return}
+  else if(a==="conn"){
+    try{await btPick();toast("Impressora conectada")}
+    catch(e){if(!(e&&e.name==="NotFoundError"))toast("Não conectou. Ligue a impressora e tente de novo.",true)}
+    prnUI();return}
+  prnSheet();
+}
+function printTicket(t,auto){
   const e=EB().center(1).bold(1).ln(PRINT_NOME()).bold(0).ln(String(SETOR[t.setor]||"Pedido").toUpperCase()).big(1).ln("MESA "+t.mesa).big(0).ln(pdata(t.criado)).center(0).sep();
   t.itens.forEach(i=>{e.bold(1).tall(1);pwrap(i.q+"x "+i.n,PCOLS,"   ").forEach(l=>e.ln(l));e.tall(0).bold(0);
     if(i.extra)pwrap(i.extra,PCOLS-3,"   ").forEach(l=>e.ln("   "+l.trim()));
     if(i.obs)pwrap("OBS: "+i.obs,PCOLS-3,"   ").forEach(l=>e.ln("   "+l.trim()))});
-  e.sep().feed(3);doPrint(e.bytes());
+  e.sep().feed(3);doPrint(e.bytes(),auto);
 }
 function printConta(m){
   const c=CONTAS[m];if(!c)return;const p=pay(m),T=totals(m),its=agg(c.itens);
@@ -725,14 +848,19 @@ function printConta(m){
   if(PRINT_FORMA()){e.ln(pline("Pagamento",p.forma));const rec=parseFloat(String(p.recebido).replace(",","."))||0;if(p.forma==="Dinheiro"&&rec>=T.tot){e.ln(pline("Recebido",brl(rec))).ln(pline("Troco",brl(rec-T.tot)))}}
   e.sep().center(1).ln("CUPOM NAO FISCAL").ln("Obrigado pela preferencia!").center(0).feed(3);doPrint(e.bytes());
 }
-function printEnvio(m,criado){
-  const tk=TICKETS.filter(t=>t.mesa===m&&t.criado===criado);if(!tk.length)return;
+function printEnvio(m,criado,lista,auto,precos){
+  const tk=lista||TICKETS.filter(t=>t.mesa===m&&t.criado===criado);if(!tk.length)return;
   const e=EB().center(1).bold(1).ln(PRINT_NOME()).bold(0).ln("PEDIDO").big(1).ln("MESA "+m).big(0).ln(pdata(criado)).center(0);
   tk.forEach(t=>{e.sep().bold(1).ln(String(SETOR[t.setor]||"").toUpperCase()).bold(0);
     t.itens.forEach(i=>{e.bold(1).tall(1);pwrap(i.q+"x "+i.n,PCOLS,"   ").forEach(l=>e.ln(l));e.tall(0).bold(0);
       if(i.extra)pwrap(i.extra,PCOLS-3,"   ").forEach(l=>e.ln("   "+l.trim()));
       if(i.obs)pwrap("OBS: "+i.obs,PCOLS-3,"   ").forEach(l=>e.ln("   "+l.trim()))})});
-  e.sep().feed(3);doPrint(e.bytes());
+  const pr=precos||((CONTAS[m]&&CONTAS[m].itens)||[]).filter(i=>i.t===criado);
+  if(pr.length){e.sep().bold(1).ln("VALOR DO PEDIDO").bold(0);let tot=0;
+    pr.forEach(i=>{tot+=i.p*i.q;e.ln(pline(i.q+"x "+i.n,brl(i.p*i.q)))});
+    e.bold(1).ln(pline("TOTAL DO PEDIDO",brl(tot))).bold(0);
+    const c=CONTAS[m];if(c&&!precos){const mt=sumItens(c.itens);if(Math.abs(mt-tot)>0.009)e.ln(pline("Total da mesa ate agora",brl(mt)))}}
+  e.sep().feed(3);doPrint(e.bytes(),auto);
 }
 function stationHTML(setor){
   const fila=TICKETS.filter(t=>t.setor===setor&&(t.status==="novo"||t.status==="preparo"));
@@ -843,6 +971,8 @@ document.addEventListener("click",async e=>{
   if(d.sk){const k=d.sk,v=+d.v;if(v<0&&(!tracked(k)||STOCK[k]<=0))return;stockWrite({qtd:{[k]:tracked(k)?{inc:v}:Math.max(0,v)}});return}
   if(d.trocasenha!==undefined){trocarSenha();return}
   if(d.unlock!==undefined){const k=await pinSheet("Senha do dono","Digite a senha do dono.","check");if(k){setKey(k);render()}return}
+  if(t.id==="prnBtn"){prnSheet();return}
+  if(d.prn){await prnAction(d.prn);return}
   if(t.id==="roleBtn"){if(OWNER||!OWNER_OK){const k=await pinSheet("Trocar de função","Só o dono troca a função deste celular. Digite a senha do dono.","check");if(!k)return;UNLOCK=k}
     ROLE="";ls("gbc_role",null);VIEW="mesas";CMESA=null;ATAB="mesas";closeSheet();render();scrollTo(0,0);return}
   if(d.role){
@@ -881,9 +1011,9 @@ setInterval(()=>{const g=ROLE==="garcom"||(ROLE==="atend"&&ATAB==="mesas"&&CMESA
 (async()=>{
   await initStore();
   setSync();
-  render();
+  render();prnUI();
   if(S.mode==="local"||(S.mode==="fb"&&CODE))subscribe();
-  keepAwake();
+  keepAwake();btAuto();
 })();
 </script><script>if("serviceWorker" in navigator&&location.protocol==="https:")addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));</script>
 </body></html>

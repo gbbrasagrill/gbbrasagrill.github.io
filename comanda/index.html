@@ -677,13 +677,60 @@ async function enviar(){
 }
 
 /* ---------- churrasqueira, cozinha (e bebidas no caixa) ---------- */
+const PRINT_KEY="gbc_print",PRINT_NOME=()=>"GB Brasa Grill",PRINT_FORMA=()=>true;
+/* ================= impressão (impressora térmica Bluetooth de 58 mm, pelo app RawBT) ================= */
+const PCOLS=32;
+const pstrip=s=>String(s??"").replace(/·/g,"-").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[×]/g,"x").replace(/[^\x20-\x7E\n]/g,"");
+function pwrap(s,w,ind){s=pstrip(s);ind=ind||"";const out=[];let line="";for(const word of s.split(/\s+/)){if(!word)continue;const cand=line?line+" "+word:word;if((out.length?ind.length:0)+cand.length<=w)line=cand;else{if(line)out.push(line);line=word.length>w?word.slice(0,w):word}}if(line)out.push(line);return out.map((l,i)=>(i?ind:"")+l)}
+function pline(l,r){l=pstrip(l);r=pstrip(r);const sp=PCOLS-l.length-r.length;if(sp>=1)return l+" ".repeat(sp)+r;return pwrap(l,PCOLS).join("\n")+"\n"+" ".repeat(Math.max(0,PCOLS-r.length))+r}
+function EB(){const b=[0x1B,0x40];const o={
+  txt(s){for(const ch of pstrip(s))b.push(ch.charCodeAt(0)&0x7F);return o},
+  ln(s){return o.txt(s==null?"":s).nl()},nl(n){for(let i=0;i<(n||1);i++)b.push(10);return o},
+  center(on){b.push(0x1B,0x61,on?1:0);return o},bold(on){b.push(0x1B,0x45,on?1:0);return o},
+  big(on){b.push(0x1D,0x21,on?0x11:0);return o},tall(on){b.push(0x1D,0x21,on?0x01:0);return o},
+  sep(){return o.ln("-".repeat(PCOLS))},feed(n){b.push(0x1B,0x64,n||3);return o},bytes(){return b}};return o}
+const pdata=t=>{const d=new Date(t||Date.now()),z=n=>String(n).padStart(2,"0");return z(d.getDate())+"/"+z(d.getMonth()+1)+"/"+d.getFullYear()+" "+z(d.getHours())+":"+z(d.getMinutes())};
+let PRINT_PEND=null;
+function sendPrint(bytes){
+  let s="";for(let i=0;i<bytes.length;i++)s+=String.fromCharCode(bytes[i]);
+  location.href="intent:base64,"+btoa(s)+"#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;";
+}
+function doPrint(bytes){
+  if(!/Android/i.test(navigator.userAgent)){toast("A impressão funciona no celular Android, com o app RawBT.",true);return}
+  if(ls(PRINT_KEY)!=="1"){PRINT_PEND=bytes;sheet(`<button class="x" type="button" data-close aria-label="Fechar">×</button><h3>Configurar a impressora</h3>
+  <p class="note" style="margin:0 0 10px">Só na primeira vez, neste celular:</p>
+  <ol style="margin:0;padding-left:20px;display:grid;gap:8px;font-size:16px;line-height:1.4">
+  <li>Ligue a impressora e, no <b>Bluetooth</b> do celular, pareie com ela (se pedir senha: <b>0000</b> ou <b>1234</b>).</li>
+  <li>Instale o app <b>RawBT</b> na Play Store (ao tocar em imprimir, ele abre a loja se não tiver).</li>
+  <li>No RawBT: <b>Configurações › Conexão › Bluetooth</b> e escolha a impressora. Em <b>Driver</b>, escolha <b>ESC/POS 58 mm</b>.</li>
+  <li>Volte aqui e toque em <b>Imprimir</b>.</li></ol>
+  <button class="btn pri wide" type="button" data-printgo style="margin-top:16px">Já configurei, imprimir</button>`);return}
+  sendPrint(bytes);
+}
+function printTicket(t){
+  const e=EB().center(1).bold(1).ln(PRINT_NOME()).bold(0).ln(String(SETOR[t.setor]||"Pedido").toUpperCase()).big(1).ln("MESA "+t.mesa).big(0).ln(pdata(t.criado)).center(0).sep();
+  t.itens.forEach(i=>{e.bold(1).tall(1);pwrap(i.q+"x "+i.n,PCOLS,"   ").forEach(l=>e.ln(l));e.tall(0).bold(0);
+    if(i.extra)pwrap(i.extra,PCOLS-3,"   ").forEach(l=>e.ln("   "+l.trim()));
+    if(i.obs)pwrap("OBS: "+i.obs,PCOLS-3,"   ").forEach(l=>e.ln("   "+l.trim()))});
+  e.sep().feed(3);doPrint(e.bytes());
+}
+function printConta(m){
+  const c=CONTAS[m];if(!c)return;const p=pay(m),T=totals(m),its=agg(c.itens);
+  const e=EB().center(1).bold(1).ln(PRINT_NOME()).bold(0).ln("CONTA - MESA "+m).ln(pdata()).center(0).sep();
+  its.forEach(i=>{e.ln(pline(i.q+"x "+i.n,brl(i.p*i.q)));if(i.extra)pwrap(i.extra,PCOLS-3).forEach(l=>e.ln("   "+l));if(i.q>1)e.ln("   "+brl(i.p)+" cada")});
+  e.sep().ln(pline("Consumo",brl(T.sub)));if(p.servico)e.ln(pline("Servico (10%)",brl(T.serv)));
+  e.bold(1).ln(pline("TOTAL",brl(T.tot))).bold(0);
+  if(p.pessoas>1)e.ln(pline("Por pessoa ("+p.pessoas+")",brl(T.cada)));
+  if(PRINT_FORMA()){e.ln(pline("Pagamento",p.forma));const rec=parseFloat(String(p.recebido).replace(",","."))||0;if(p.forma==="Dinheiro"&&rec>=T.tot){e.ln(pline("Recebido",brl(rec))).ln(pline("Troco",brl(rec-T.tot)))}}
+  e.sep().center(1).ln("CUPOM NAO FISCAL").ln("Obrigado pela preferencia!").center(0).feed(3);doPrint(e.bytes());
+}
 function stationHTML(setor){
   const fila=TICKETS.filter(t=>t.setor===setor&&(t.status==="novo"||t.status==="preparo"));
   const prontos=TICKETS.filter(t=>t.setor===setor&&t.status==="pronto").sort((a,b)=>b.atualizado-a.atualizado);
   return`<h2 class="sec"><span class="dot d-${setor}"></span>${SETOR[setor]} <small>${fila.length?fila.length+" na fila":"fila vazia"}</small></h2>
   ${fila.length?`<div class="queue">${fila.map(t=>{const a=mins(t.criado);return`<article class="tc${NEWIDS.has(t._id)?" new":""}"><div class="h"><span class="m">Mesa ${t.mesa}</span><span class="age ${a>=20?"bad":a>=10?"warn":""}">${ago(t.criado)}<br><span class="pill p-${t.status}">${STATUS[t.status]}</span></span></div>
     <ul>${t.itens.map(i=>`<li>${esc(i.q+"× "+i.n)}${i.extra?`<small>${esc(i.extra)}</small>`:""}${i.obs?`<span class="ob">${esc(i.obs)}</span>`:""}</li>`).join("")}</ul>
-    <div class="acts">${t.status==="novo"?`<button class="btn" type="button" data-st="${t._id}" data-v="preparo">Fazendo</button>`:`<button class="btn ghost" type="button" data-st="${t._id}" data-v="novo">Voltar</button>`}<button class="btn ok" type="button" data-st="${t._id}" data-v="pronto">Pronto</button></div></article>`}).join("")}</div>`
+    <div class="acts">${t.status==="novo"?`<button class="btn" type="button" data-st="${t._id}" data-v="preparo">Fazendo</button>`:`<button class="btn ghost" type="button" data-st="${t._id}" data-v="novo">Voltar</button>`}<button class="btn ok" type="button" data-st="${t._id}" data-v="pronto">Pronto</button></div><button class="btn ghost" type="button" data-printt="${t._id}" style="min-height:40px">Imprimir pedido</button></article>`}).join("")}</div>`
   :`<div class="empty"><b>Sem pedidos agora</b>Os pedidos das mesas aparecem aqui na hora, com som de aviso.</div>`}
   ${prontos.length?`<h2 class="sec" style="font-size:20px">Prontos, esperando o garçom</h2><div class="done">${prontos.slice(0,8).map(t=>`<div class="r"><span><b style="color:var(--ash)">Mesa ${t.mesa}</b> · ${t.itens.map(i=>esc(i.q+"× "+i.n)).join(", ")} · ${ago(t.atualizado)}</span><button class="btn ghost" type="button" data-st="${t._id}" data-v="preparo" style="min-height:38px;padding:6px 10px;font-size:13px">Desfazer</button></div>`).join("")}</div>`:""}`;
 }
@@ -728,6 +775,7 @@ function contaHTML(m){
     <div class="fld" style="margin:0"><span>Forma de pagamento</span><div class="seg" id="forma">${["Pix","Cartão","Dinheiro"].map(v=>`<button type="button" data-forma="${v}" aria-pressed="${p.forma===v}">${v}</button>`).join("")}</div></div>
     ${p.forma==="Dinheiro"?`<div class="fld" style="margin:0"><span>Valor recebido</span><input type="text" inputmode="decimal" id="recebido" value="${esc(p.recebido)}" placeholder="Ex.: 100,00" autocomplete="off"><span class="note" id="troco">${rec?(rec>=T.tot?"Troco: "+brl(rec-T.tot):"Faltam "+brl(T.tot-rec)):"Digite quanto o cliente entregou para ver o troco."}</span></div>`:""}
   </div>
+  <button class="btn ghost wide" type="button" data-printconta style="margin-top:12px">Imprimir conta</button>
   ${p.confirm?`<div class="confirm"><b>Fechar a Mesa ${m} em ${p.forma} · ${brl(T.tot)}?</b><span class="note">A mesa fica livre e a venda entra no caixa do dia.</span><div style="display:grid;grid-template-columns:1fr 1.4fr;gap:8px"><button class="btn ghost" type="button" data-fechar="nao">Cancelar</button><button class="btn ok" type="button" data-fechar="sim" id="fecharSim">Confirmar</button></div></div>`
   :`<button class="btn pri wide" type="button" data-fechar="pedir" style="margin-top:12px;min-height:56px;font-size:18px">${its.length?"Fechar conta":"Liberar mesa"}</button>`}`;
 }
@@ -798,6 +846,9 @@ document.addEventListener("click",async e=>{
   if(d.review!==undefined){openReview();return}
   if(d.dq!==undefined){const x=DRAFT[+d.dq];if(x&& +d.v>0&&avail(x.sid)<1){toast(SNAME[x.sid]+": não tem mais no estoque",true);return}if(x){x.q+= +d.v;if(x.q<=0)DRAFT.splice(+d.dq,1)}renderDraftBar();openReview();return}
   if(d.pediu!==undefined){const c=CONTAS[VIEW];if(c)try{await patch("contas/m"+VIEW,{pediuConta:!c.pediuConta})}catch(err){writeErr(err)}return}
+  if(d.printt){const t=TICKETS.find(x=>x._id===d.printt);if(t)printTicket(t);return}
+  if(d.printconta!==undefined){if(CMESA!==null)printConta(CMESA);return}
+  if(d.printgo!==undefined){ls(PRINT_KEY,"1");const b=PRINT_PEND;PRINT_PEND=null;closeSheet();if(b)sendPrint(b);return}
   if(d.levei){try{await patch("tickets/"+d.levei,{status:"entregue",atualizado:Date.now()})}catch(err){writeErr(err)}return}
   if(d.st){try{await patch("tickets/"+d.st,{status:d.v,atualizado:Date.now()})}catch(err){writeErr(err)}return}
   if(d.tab){CTAB=d.tab;CMESA=null;renderCaixa();scrollTo(0,0);return}

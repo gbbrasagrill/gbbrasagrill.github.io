@@ -218,6 +218,7 @@ input[type=text],input[type=number],input[inputmode]{width:100%;background:var(-
 "use strict";
 /* ================= cardápio (mesmos itens e preços do cardápio digital) ================= */
 const ESPETOS=["Contra filé","Contra com bacon","Coração","Asinha de frango","Frango com bacon","Linguiça","Contra filé “2”","Filé de frango"];
+const QUEIJOS_JANTA=["Provolone","Queijo coalho","Romeu e Julieta"]; // também podem ser o espeto da jantinha
 const ESPECIAIS=["Cupim","Enroladinho de frango com bacon “Medalhão”","Cafta de carne com queijo","Picanha montada"];
 const SETOR={churrasqueira:"Churrasqueira",cozinha:"Cozinha",bebidas:"Bebidas"};
 const CAT=[
@@ -228,7 +229,7 @@ const CAT=[
    ["tg","Feijão tropeiro – marmita grande",20,{g:"Feijão tropeiro"}],["th","Feijão tropeiro – marmita (hamburgueria)",15,{g:"Feijão tropeiro"}],
    ["pm","Porção de mandioca",5,{g:"Acompanhamentos"}],["em","Espeto + mandioca",15,{g:"Acompanhamentos",opt:"espmand",d:"Escolher o espeto"}]]},
  {id:"petiscos",t:"Petiscos",setor:"cozinha",items:[["fp","Frango a passarinho",29.9],["dc","Disco de carne com queijo",24.9,{d:"6 unidades"}],["df","Disco de frango com queijo",23.9,{d:"6 unidades"}]]},
- {id:"queijos",t:"Queijos e sobremesa",setor:"churrasqueira",items:[["q1","Provolone",10,{g:"Queijos na brasa"}],["q2","Queijo coalho",10,{g:"Queijos na brasa"}],["q3","Coalho com mel",15,{g:"Queijos na brasa"}],["rj","Espeto Romeu e Julieta",15,{g:"Sobremesa"}]]},
+ {id:"queijos",t:"Espetos de queijo",setor:"churrasqueira",items:[["q1","Provolone",10],["q2","Queijo coalho",10],["q3","Coalho com mel",15],["rj","Espeto Romeu e Julieta",15]]},
  {id:"refri",t:"Refrigerantes",setor:"bebidas",items:[
    ["r1","Coca-Cola lata",6,{g:"Lata 350 ml"}],["r2","Coca Zero lata",6.5,{g:"Lata 350 ml"}],["r3","Fanta Laranja lata",6,{g:"Lata 350 ml"}],["r4","Guaraná Antarctica lata",6,{g:"Lata 350 ml"}],["r5","Pepsi Zero lata",6,{g:"Lata 350 ml"}],["r6","Sprite lata",6,{g:"Lata 350 ml"}],
    ["r7","Coca-Cola 600 ml",8.5,{g:"600 ml"}],["r8","Coca Zero 600 ml",8.5,{g:"600 ml"}],["r9","Fanta Laranja 600 ml",8.5,{g:"600 ml"}],["r10","Guaraná Antarctica 600 ml",8.5,{g:"600 ml"}],["r11","Limoneto 600 ml",7,{g:"600 ml"}],["r12","Sprite 600 ml",7,{g:"600 ml"}],
@@ -637,10 +638,10 @@ function addDraft(it,o,q){
 /* folha de opções: jantinha e espeto + mandioca */
 let OPT=null;
 function openOpt(it){
-  const first=ESPETOS.concat(ESPECIAIS).find(n=>avail(SID[n])>0);
+  const first=ESPETOS.concat(ESPECIAIS,QUEIJOS_JANTA).find(n=>avail(SID[n])>0);
   if(!first){toast("Todos os espetos estão esgotados",true);return}
   OPT={it,feijao:"Feijão tropeiro",espeto:first,q:1};
-  const esp=ESPETOS.concat(ESPECIAIS);
+  const esp=ESPETOS.concat(ESPECIAIS,QUEIJOS_JANTA);
   sheet(`<button class="x" type="button" data-close aria-label="Fechar">×</button><h3>${esc(it.n)}</h3><p class="note" style="margin:0">${brl(it.p)} · Mesa ${VIEW}</p>
   ${it.opt==="jantinha"?`<div class="fld"><span>Feijão (vai para a cozinha)</span><div class="seg" id="oFeijao">${["Feijão tropeiro","Feijão de caldo"].map((v,i)=>`<button type="button" aria-pressed="${!i}">${v}</button>`).join("")}</div></div>`:""}
   <div class="fld"><span>${it.opt==="jantinha"?"Espeto incluso (vai para a churrasqueira)":"Qual espeto (vai para a churrasqueira)"}</span><div class="seg col" id="oEsp">${esp.map(v=>{const k=SID[v],out=avail(k)<=0;return`<button type="button" data-v="${esc(v)}" aria-pressed="${v===first}"${out?" disabled":""}>${esc(v)}${tracked(k)?` <small style="float:right;font-weight:600">${out?"esgotado":"restam "+avail(k)}</small>`:""}</button>`}).join("")}</div></div>

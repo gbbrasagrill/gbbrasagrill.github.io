@@ -605,7 +605,8 @@ function renderNaMesa(){
   const tk=TICKETS.filter(t=>t.mesa===VIEW&&t.conta===c.abertaEm);
   el.innerHTML=`<div class="box"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b style="font:400 20px var(--display);text-transform:uppercase">Pedidos da mesa</b>
     ${ROLE==="atend"?`<button class="btn pri" type="button" data-conta="${VIEW}" style="margin-left:auto;min-height:40px;padding:8px 14px;font-size:14px">Fechar conta</button>`:`<button class="btn ${c.pediuConta?"":"ghost"}" type="button" data-pediu style="margin-left:auto;min-height:40px;padding:8px 12px;font-size:14px${c.pediuConta?";background:var(--gold);color:#2a1600":""}">${c.pediuConta?"Conta pedida ✓":"Pedir a conta"}</button>`}</div>
-    ${tk.length?tk.map(t=>`<div class="tk"><div class="h"><span><span class="dot d-${t.setor}"></span>${SETOR[t.setor]}</span><span>${hhmm(t.criado)}</span><span class="pill p-${t.status}">${STATUS[t.status]}</span>${t.status==="pronto"?`<button class="btn ok" type="button" data-levei="${t._id}" style="margin-left:auto;min-height:36px;padding:6px 12px;font-size:14px">Levei</button>`:""}</div><div class="its">${t.itens.map(i=>esc(i.q+"× "+i.n+(i.extra?" ("+i.extra+")":"")+(i.obs?" · "+i.obs:""))).join("<br>")}</div></div>`).join(""):'<p class="note" style="margin:0">Nenhum pedido enviado ainda.</p>'}</div>`;
+    ${tk.length?tk.map(t=>`<div class="tk"><div class="h"><span><span class="dot d-${t.setor}"></span>${SETOR[t.setor]}</span><span>${hhmm(t.criado)}</span><span class="pill p-${t.status}">${STATUS[t.status]}</span>${t.status==="pronto"?`<button class="btn ok" type="button" data-levei="${t._id}" style="margin-left:auto;min-height:36px;padding:6px 12px;font-size:14px">Levei</button>`:""}</div><div class="its">${t.itens.map(i=>esc(i.q+"× "+i.n+(i.extra?" ("+i.extra+")":"")+(i.obs?" · "+i.obs:""))).join("<br>")}</div></div>`).join(""):'<p class="note" style="margin:0">Nenhum pedido enviado ainda.</p>'}
+    ${tk.length?(()=>{const ult=Math.max(...tk.map(t=>t.criado));return`<button class="btn ${Date.now()-ult<180000?"pri":"ghost"} wide" type="button" data-printenv="${ult}" style="margin-top:10px;min-height:48px">Imprimir pedido de ${hhmm(ult)}</button>`})():""}</div>`;
 }
 const STATUS={novo:"Na fila",preparo:"Fazendo",pronto:"Pronto",entregue:"Entregue"};
 function draftCount(){return DRAFT.reduce((a,d)=>a+d.q,0)}
@@ -723,6 +724,15 @@ function printConta(m){
   if(p.pessoas>1)e.ln(pline("Por pessoa ("+p.pessoas+")",brl(T.cada)));
   if(PRINT_FORMA()){e.ln(pline("Pagamento",p.forma));const rec=parseFloat(String(p.recebido).replace(",","."))||0;if(p.forma==="Dinheiro"&&rec>=T.tot){e.ln(pline("Recebido",brl(rec))).ln(pline("Troco",brl(rec-T.tot)))}}
   e.sep().center(1).ln("CUPOM NAO FISCAL").ln("Obrigado pela preferencia!").center(0).feed(3);doPrint(e.bytes());
+}
+function printEnvio(m,criado){
+  const tk=TICKETS.filter(t=>t.mesa===m&&t.criado===criado);if(!tk.length)return;
+  const e=EB().center(1).bold(1).ln(PRINT_NOME()).bold(0).ln("PEDIDO").big(1).ln("MESA "+m).big(0).ln(pdata(criado)).center(0);
+  tk.forEach(t=>{e.sep().bold(1).ln(String(SETOR[t.setor]||"").toUpperCase()).bold(0);
+    t.itens.forEach(i=>{e.bold(1).tall(1);pwrap(i.q+"x "+i.n,PCOLS,"   ").forEach(l=>e.ln(l));e.tall(0).bold(0);
+      if(i.extra)pwrap(i.extra,PCOLS-3,"   ").forEach(l=>e.ln("   "+l.trim()));
+      if(i.obs)pwrap("OBS: "+i.obs,PCOLS-3,"   ").forEach(l=>e.ln("   "+l.trim()))})});
+  e.sep().feed(3);doPrint(e.bytes());
 }
 function stationHTML(setor){
   const fila=TICKETS.filter(t=>t.setor===setor&&(t.status==="novo"||t.status==="preparo"));
@@ -846,6 +856,7 @@ document.addEventListener("click",async e=>{
   if(d.review!==undefined){openReview();return}
   if(d.dq!==undefined){const x=DRAFT[+d.dq];if(x&& +d.v>0&&avail(x.sid)<1){toast(SNAME[x.sid]+": não tem mais no estoque",true);return}if(x){x.q+= +d.v;if(x.q<=0)DRAFT.splice(+d.dq,1)}renderDraftBar();openReview();return}
   if(d.pediu!==undefined){const c=CONTAS[VIEW];if(c)try{await patch("contas/m"+VIEW,{pediuConta:!c.pediuConta})}catch(err){writeErr(err)}return}
+  if(d.printenv){printEnvio(VIEW,+d.printenv);return}
   if(d.printt){const t=TICKETS.find(x=>x._id===d.printt);if(t)printTicket(t);return}
   if(d.printconta!==undefined){if(CMESA!==null)printConta(CMESA);return}
   if(d.printgo!==undefined){ls(PRINT_KEY,"1");const b=PRINT_PEND;PRINT_PEND=null;closeSheet();if(b)sendPrint(b);return}

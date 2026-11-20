@@ -611,7 +611,7 @@ function renderNaMesa(){
   el.innerHTML=`<div class="box"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b style="font:400 20px var(--display);text-transform:uppercase">Pedidos da mesa</b>
     ${ROLE==="atend"?`<button class="btn pri" type="button" data-conta="${VIEW}" style="margin-left:auto;min-height:40px;padding:8px 14px;font-size:14px">Fechar conta</button>`:`<button class="btn ${c.pediuConta?"":"ghost"}" type="button" data-pediu style="margin-left:auto;min-height:40px;padding:8px 12px;font-size:14px${c.pediuConta?";background:var(--gold);color:#2a1600":""}">${c.pediuConta?"Conta pedida ✓":"Pedir a conta"}</button>`}</div>
     ${tk.length?tk.map(t=>`<div class="tk"><div class="h"><span><span class="dot d-${t.setor}"></span>${SETOR[t.setor]}</span><span>${hhmm(t.criado)}</span><span class="pill p-${t.status}">${STATUS[t.status]}</span>${t.status==="pronto"?`<button class="btn ok" type="button" data-levei="${t._id}" style="margin-left:auto;min-height:36px;padding:6px 12px;font-size:14px">Levei</button>`:""}</div><div class="its">${t.itens.map(i=>esc(i.q+"× "+i.n+(i.extra?" ("+i.extra+")":"")+(i.obs?" · "+i.obs:""))).join("<br>")}</div></div>`).join(""):'<p class="note" style="margin:0">Nenhum pedido enviado ainda.</p>'}
-    ${tk.length?(()=>{const ult=Math.max(...tk.map(t=>t.criado));return`<button class="btn ${Date.now()-ult<180000?"pri":"ghost"} wide" type="button" data-printenv="${ult}" style="margin-top:10px;min-height:48px">Imprimir pedido de ${hhmm(ult)}</button>`})():""}</div>`;
+    ${tk.length?(()=>{const ult=Math.max(...tk.map(t=>t.criado));return`<div style="display:grid;gap:8px;margin-top:10px"><button class="btn pri wide" type="button" data-printcm="${VIEW}" style="min-height:52px">Imprimir comanda · ${brl(sumItens(c.itens))}</button><button class="btn ghost wide" type="button" data-printenv="${ult}" style="min-height:42px;font-size:14px">Imprimir só o pedido de ${hhmm(ult)}</button></div>`})():""}</div>`;
 }
 const STATUS={novo:"Na fila",preparo:"Fazendo",pronto:"Pronto",entregue:"Entregue"};
 function draftCount(){return DRAFT.reduce((a,d)=>a+d.q,0)}
@@ -838,14 +838,14 @@ function printTicket(t,auto){
     if(i.obs)pwrap("OBS: "+i.obs,PCOLS-3,"   ").forEach(l=>e.ln("   "+l.trim()))});
   e.sep().feed(3);doPrint(e.bytes(),auto);
 }
-function printConta(m){
+function printConta(m,pre){
   const c=CONTAS[m];if(!c)return;const p=pay(m),T=totals(m),its=agg(c.itens);
-  const e=EB().center(1).bold(1).ln(PRINT_NOME()).bold(0).ln("CONTA - MESA "+m).ln(pdata()).center(0).sep();
+  const e=EB().center(1).bold(1).ln(PRINT_NOME()).bold(0).ln(pre?"COMANDA":"CONTA").big(1).ln("MESA "+m).big(0).ln(pdata()).center(0).sep();
   its.forEach(i=>{e.ln(pline(i.q+"x "+i.n,brl(i.p*i.q)));if(i.extra)pwrap(i.extra,PCOLS-3).forEach(l=>e.ln("   "+l));if(i.q>1)e.ln("   "+brl(i.p)+" cada")});
   e.sep().ln(pline("Consumo",brl(T.sub)));if(p.servico)e.ln(pline("Servico (10%)",brl(T.serv)));
   e.bold(1).ln(pline("TOTAL",brl(T.tot))).bold(0);
   if(p.pessoas>1)e.ln(pline("Por pessoa ("+p.pessoas+")",brl(T.cada)));
-  if(PRINT_FORMA()){e.ln(pline("Pagamento",p.forma));const rec=parseFloat(String(p.recebido).replace(",","."))||0;if(p.forma==="Dinheiro"&&rec>=T.tot){e.ln(pline("Recebido",brl(rec))).ln(pline("Troco",brl(rec-T.tot)))}}
+  if(PRINT_FORMA()&&!pre){e.ln(pline("Pagamento",p.forma));const rec=parseFloat(String(p.recebido).replace(",","."))||0;if(p.forma==="Dinheiro"&&rec>=T.tot){e.ln(pline("Recebido",brl(rec))).ln(pline("Troco",brl(rec-T.tot)))}}
   e.sep().center(1).ln("CUPOM NAO FISCAL").ln("Obrigado pela preferencia!").center(0).feed(3);doPrint(e.bytes());
 }
 function printEnvio(m,criado,lista,auto,precos){
@@ -986,6 +986,7 @@ document.addEventListener("click",async e=>{
   if(d.review!==undefined){openReview();return}
   if(d.dq!==undefined){const x=DRAFT[+d.dq];if(x&& +d.v>0&&avail(x.sid)<1){toast(SNAME[x.sid]+": não tem mais no estoque",true);return}if(x){x.q+= +d.v;if(x.q<=0)DRAFT.splice(+d.dq,1)}renderDraftBar();openReview();return}
   if(d.pediu!==undefined){const c=CONTAS[VIEW];if(c)try{await patch("contas/m"+VIEW,{pediuConta:!c.pediuConta})}catch(err){writeErr(err)}return}
+  if(d.printcm){printConta(+d.printcm,true);return}
   if(d.printenv){printEnvio(VIEW,+d.printenv);return}
   if(d.printt){const t=TICKETS.find(x=>x._id===d.printt);if(t)printTicket(t);return}
   if(d.printconta!==undefined){if(CMESA!==null)printConta(CMESA);return}
